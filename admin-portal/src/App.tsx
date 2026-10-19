@@ -490,11 +490,9 @@ export default function App() {
             <span className="kpi-value">{overview.total_officers}</span>
           </div>
           <div className="kpi-footer">
-            <span className="trend-badge-active">
-              <span className="pulse-dot" />
-              {overview.active_officers_today} active
+            <span style={{ color: 'var(--text-secondary)' }}>
+              {overview.active_officers_today} active &mdash; {overview.total_officers} total
             </span>
-            <span>on route today</span>
           </div>
         </div>
 
@@ -614,9 +612,7 @@ export default function App() {
                       </div>
                       <div className="officer-meta">
                         <span className="officer-name">{officer.name}</span>
-                        <span className="officer-trips-sub">
-                          {officer.sessions_count_today} {officer.sessions_count_today === 1 ? 'session' : 'sessions'} today
-                        </span>
+                        <span className="officer-trips-sub">{officer.email}</span>
                       </div>
                     </div>
 
@@ -625,7 +621,6 @@ export default function App() {
                         {officer.today_distance_km.toFixed(1)} km
                       </span>
                       <span className={`status-pill ${officer.status}`}>
-                        {officer.status === 'active' && <span className="pulse-dot" />}
                         {officer.status === 'active' ? 'On Route' : 'Idle'}
                       </span>
                     </div>
@@ -651,9 +646,8 @@ export default function App() {
                   {selectedOfficer ? selectedOfficer.name : 'Select an Officer'}
                 </span>
                 {selectedOfficer && (
-                  <span className={`status-pill ${selectedOfficer.status}`}>
-                    {selectedOfficer.status === 'active' && <span className="pulse-dot" />}
-                    {selectedOfficer.status === 'active' ? 'Live Tracking' : 'Completed'}
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                    {selectedOfficer.email}
                   </span>
                 )}
               </div>
@@ -761,9 +755,9 @@ export default function App() {
                       <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{off.email}</div>
                     </td>
                     <td>
-                      <code style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-secondary)' }}>
-                        {off.user_id.substring(0, 8)}
-                      </code>
+                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                        {off.email}
+                      </span>
                     </td>
                     <td>
                       <span
