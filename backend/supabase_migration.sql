@@ -1,5 +1,5 @@
 -- ============================================================
---  Supabase Migration: GPS Tracking Application Schema
+--  Supabase Migration: GPS Tracking Application SchemaWorking
 --  Run this in the Supabase SQL Editor:
 --  https://supabase.com/dashboard/project/erggjpdfkfaxpnxpieho/sql/new
 -- ============================================================

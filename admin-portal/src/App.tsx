@@ -71,6 +71,7 @@ const customApiUrl = import.meta.env.VITE_API_URL
 
 const API_URLS = [
   ...(customApiUrl ? [customApiUrl] : []),
+  'https://fom-1.onrender.com/api/v1',
   'http://localhost:8000/api/v1',
   'http://localhost:8001/api/v1',
   'http://127.0.0.1:8000/api/v1',
