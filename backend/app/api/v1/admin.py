@@ -36,7 +36,8 @@ def _get_user_display_name(user_id: str, users_map: dict) -> str:
     if user:
         meta = getattr(user, "user_metadata", {}) or {}
         email = getattr(user, "email", "") or ""
-        return meta.get("full_name") or meta.get("name") or (email.split("@")[0] if email else f"Officer {user_id[:6]}")
+        # Prefer explicit full name, then email (full), then short ID fallback
+        return meta.get("full_name") or meta.get("name") or email or f"Officer {user_id[:6]}"
     return f"Officer {user_id[:6]}"
 
 
@@ -93,10 +94,17 @@ async def list_officers(filter_date: Optional[str] = Query(None, description="YY
     users_map = {}
     try:
         auth_users = sb.auth.admin.list_users()
+        # supabase-py v1 returns object with .users; v2 returns a plain list
         if hasattr(auth_users, "users"):
-            users_map = {str(u.id): u for u in auth_users.users}
+            user_list = auth_users.users
+        elif isinstance(auth_users, list):
+            user_list = auth_users
+        else:
+            user_list = []
+        users_map = {str(u.id): u for u in user_list}
+        print(f"[Admin API] Loaded {len(users_map)} users from auth")
     except Exception as e:
-        print("[Admin API] Note: auth.admin.list_users() not available:", e)
+        print("[Admin API] auth.admin.list_users() failed:", e)
 
     # 2. Fetch all sessions
     sessions_res = (
@@ -106,6 +114,21 @@ async def list_officers(filter_date: Optional[str] = Query(None, description="YY
         .execute()
     )
     all_sessions = sessions_res.data or []
+
+    # If users_map is empty, fetch each unique user individually as fallback
+    if not users_map:
+        unique_uids = list(set(s.get("user_id") for s in all_sessions if s.get("user_id")))
+        for uid in unique_uids:
+            try:
+                u = sb.auth.admin.get_user_by_id(uid)
+                # get_user_by_id returns a UserResponse with .user
+                user_obj = getattr(u, "user", u)
+                if user_obj:
+                    users_map[str(uid)] = user_obj
+            except Exception:
+                pass
+        print(f"[Admin API] Fallback: loaded {len(users_map)} users individually")
+
 
     target_date_str = filter_date or datetime.now(timezone.utc).date().isoformat()
 
