@@ -1,10 +1,34 @@
 from datetime import datetime, timezone, date
 from uuid import UUID
 from typing import Optional
+import math
 from fastapi import APIRouter, HTTPException, Query, status
 from app.db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Calculate great-circle distance between two GPS coordinates in km."""
+    R = 6371.0
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def _compute_distance_from_points(points: list) -> float:
+    """Sum haversine distances across an ordered list of GPS point dicts."""
+    total = 0.0
+    for i in range(1, len(points)):
+        try:
+            total += _haversine_km(
+                float(points[i - 1]["latitude"]), float(points[i - 1]["longitude"]),
+                float(points[i]["latitude"]), float(points[i]["longitude"]),
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+    return round(total, 2)
 
 
 def _get_user_display_name(user_id: str, users_map: dict) -> str:
@@ -204,6 +228,8 @@ async def get_session_route(session_id: UUID):
     """
     Retrieve full GPS route coordinates and metrics for an individual session
     to render on the admin interactive map.
+    For active sessions the stored total_distance_km is 0 (updated only on finish),
+    so we compute real distance from GPS points and return it as computed_distance_km.
     """
     sb = get_supabase()
 
@@ -220,7 +246,7 @@ async def get_session_route(session_id: UUID):
 
     session = session_res.data
 
-    # Fetch location points
+    # Fetch location points ordered chronologically
     points_res = (
         sb.table("location_points")
         .select("id, latitude, longitude, recorded_at, accuracy_m, speed_mps, altitude_m")
@@ -230,11 +256,19 @@ async def get_session_route(session_id: UUID):
     )
     points = points_res.data or []
 
+    stored_distance = round(float(session.get("total_distance_km") or 0), 2)
+    # Always compute from GPS points — this is accurate for both active and finished sessions
+    computed_distance = _compute_distance_from_points(points)
+    # Use computed distance as the authoritative value; fall back to stored only if no points
+    best_distance = computed_distance if points else stored_distance
+
     return {
         "session_id": str(session_id),
         "started_at": session.get("started_at"),
         "ended_at": session.get("ended_at"),
-        "total_distance_km": round(float(session.get("total_distance_km") or 0), 2),
+        "total_distance_km": best_distance,
+        "stored_distance_km": stored_distance,
+        "computed_distance_km": computed_distance,
         "status": session.get("status"),
         "point_count": len(points),
         "points": points,
