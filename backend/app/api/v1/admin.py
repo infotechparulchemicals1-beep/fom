@@ -51,13 +51,12 @@ def _get_user_email(user_id: str, users_map: dict) -> str:
 @router.get("/overview")
 async def get_admin_overview():
     """
-    Overview statistics for team leads and admins.
-    Uses IST (UTC+5:30) for day boundaries since this is an India-based field app.
+    Overview statistics. Uses IST (UTC+5:30) for day boundaries.
+    Distances computed from actual GPS points for accuracy on active sessions.
     """
     from datetime import timedelta
     sb = get_supabase()
 
-    # Compute today's start and end in IST, converted to UTC for DB comparison
     IST = timedelta(hours=5, minutes=30)
     now_utc = datetime.now(timezone.utc)
     now_ist = now_utc + IST
@@ -65,11 +64,9 @@ async def get_admin_overview():
     today_start_utc = (today_ist_midnight - IST).isoformat()
     tomorrow_start_utc = (today_ist_midnight + timedelta(days=1) - IST).isoformat()
 
-    # Query all sessions
-    all_sessions_res = sb.table("tracking_sessions").select("user_id, status, total_distance_km, started_at").execute()
+    all_sessions_res = sb.table("tracking_sessions").select("id, user_id, status, total_distance_km, started_at").execute()
     all_sessions = all_sessions_res.data or []
 
-    # Filter for today using IST-aligned UTC boundaries
     today_sessions = [
         s for s in all_sessions
         if today_start_utc <= (s.get("started_at") or "") < tomorrow_start_utc
@@ -80,7 +77,28 @@ async def get_admin_overview():
         s.get("user_id") for s in all_sessions if s.get("status") == "active"
     )
 
-    total_km_today = sum(float(s.get("total_distance_km") or 0) for s in today_sessions)
+    # Bulk-fetch GPS points for today's sessions and compute real distances
+    today_ids = [s["id"] for s in today_sessions if s.get("id")]
+    pts_by_session: dict = {sid: [] for sid in today_ids}
+    if today_ids:
+        pts_res = (
+            sb.table("location_points")
+            .select("session_id, latitude, longitude, recorded_at")
+            .in_("session_id", today_ids)
+            .order("recorded_at", desc=False)
+            .execute()
+        )
+        for pt in (pts_res.data or []):
+            sid = pt.get("session_id")
+            if sid in pts_by_session:
+                pts_by_session[sid].append(pt)
+
+    total_km_today = sum(
+        _compute_distance_from_points(pts_by_session.get(s["id"], [])) or float(s.get("total_distance_km") or 0)
+        for s in today_sessions
+    )
+
+    # All-time: use stored values (good enough for historical completed sessions)
     total_km_all_time = sum(float(s.get("total_distance_km") or 0) for s in all_sessions)
 
     return {
@@ -157,7 +175,23 @@ async def list_officers(filter_date: Optional[str] = Query(None, description="YY
         target_start_utc = (today_ist_midnight - IST).isoformat()
         target_end_utc = (today_ist_midnight + timedelta(days=1) - IST).isoformat()
 
-    # Group sessions by officer (user_id)
+    # Bulk-fetch ALL GPS points for ALL sessions in one query
+    all_session_ids = [s["id"] for s in all_sessions if s.get("id")]
+    pts_by_session: dict = {sid: [] for sid in all_session_ids}
+    if all_session_ids:
+        pts_res = (
+            sb.table("location_points")
+            .select("session_id, latitude, longitude, recorded_at")
+            .in_("session_id", all_session_ids)
+            .order("recorded_at", desc=False)
+            .execute()
+        )
+        for pt in (pts_res.data or []):
+            sid = pt.get("session_id")
+            if sid in pts_by_session:
+                pts_by_session[sid].append(pt)
+
+    # Group sessions by officer and compute GPS-based distances
     officers_dict = {}
     for s in all_sessions:
         uid = str(s.get("user_id"))
@@ -178,11 +212,14 @@ async def list_officers(filter_date: Optional[str] = Query(None, description="YY
             }
 
         rec = officers_dict[uid]
-        dist = float(s.get("total_distance_km") or 0)
+        # Use GPS-computed distance; fall back to stored if no points
+        pts = pts_by_session.get(s.get("id"), [])
+        stored = float(s.get("total_distance_km") or 0)
+        dist = _compute_distance_from_points(pts) if pts else stored
+
         rec["total_distance_km"] += dist
         rec["total_sessions_count"] += 1
 
-        # Check if started within today's IST boundaries
         started_at_str = s.get("started_at") or ""
         if target_start_utc <= started_at_str < target_end_utc:
             rec["today_distance_km"] += dist
@@ -190,7 +227,6 @@ async def list_officers(filter_date: Optional[str] = Query(None, description="YY
             if s.get("status") == "active":
                 rec["status"] = "active"
 
-        # Update last active timestamp
         if not rec["last_active_at"] or (started_at_str > rec["last_active_at"]):
             rec["last_active_at"] = started_at_str
             rec["latest_session_id"] = s.get("id")
