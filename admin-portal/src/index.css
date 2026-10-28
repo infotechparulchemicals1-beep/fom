@@ -273,21 +273,7 @@ body {
   gap: 6px;
 }
 
-.trend-badge-active {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--emerald-accent);
-  font-weight: 500;
-}
 
-.pulse-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background-color: var(--emerald-accent);
-  box-shadow: 0 0 8px var(--emerald-accent);
-}
 
 /* Refined Navigation Tabs */
 .tabs-navbar {

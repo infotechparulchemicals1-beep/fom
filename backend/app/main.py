@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
-from app.api.v1 import sessions, locations, admin, auth
+from app.api.v1 import sessions, locations, admin, auth, profiles, customers, visits
 
 app = FastAPI(
     title="Offline GPS Tracker API",
@@ -22,6 +22,9 @@ app.include_router(auth.router, prefix="/api/v1")
 app.include_router(sessions.router, prefix="/api/v1")
 app.include_router(locations.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
+app.include_router(profiles.router, prefix="/api/v1")
+app.include_router(customers.router, prefix="/api/v1")
+app.include_router(visits.router, prefix="/api/v1")
 
 
 @app.get("/health")

@@ -45,5 +45,11 @@ Thumbs.db
 *.swp
 *.swo
 
-# Mobile (Optional - exclude if keeping in separate repository)
-# mobile/
+# Mobile — has its own git repo, push separately
+mobile/
+
+# Agent runtime files (not needed in repo)
+.agents/
+aura_docs.docx
+start.mp4
+

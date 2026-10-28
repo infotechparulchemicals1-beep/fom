@@ -189,8 +189,360 @@ function generateMockRoute(centerLat: number, centerLon: number, pointsCount = 3
   return points;
 }
 
+// ═══════════════════════════════════════════════════════════════
+// VISIT TIMELINE TAB
+// ═══════════════════════════════════════════════════════════════
+
+interface VisitEntry {
+  id: string;
+  user_id: string;
+  customer_id: string;
+  checked_in_at: string;
+  checked_out_at: string | null;
+  duration_minutes: number | null;
+  notes: string | null;
+  customers?: { name: string; village?: string; taluka?: string };
+}
+
+interface OfficerTimeline {
+  user_id: string;
+  name: string;
+  email: string;
+  total_meetings: number;
+  total_minutes: number;
+  visits: VisitEntry[];
+}
+
+function formatDurMin(min: number | null) {
+  if (!min) return '—';
+  const h = Math.floor(min / 60); const m = min % 60;
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+function fmtTime(iso: string | null) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+function fmtDateLabel(iso: string) {
+  return new Date(iso).toLocaleDateString('en-IN', { weekday:'short', day:'numeric', month:'short' });
+}
+
+function VisitTimelineTab({ apiUrls, officers }: { apiUrls: string[]; officers: FieldOfficer[] }) {
+  const [selectedUserId, setSelectedUserId] = React.useState<string | null>(null);
+  const [timeline, setTimeline] = React.useState<OfficerTimeline[]>([]);
+  const [selectedDate, setSelectedDate] = React.useState(() => new Date().toISOString().slice(0, 10));
+  const [isLoading, setIsLoading] = React.useState(false);
+
+  const fetchTimeline = async (date: string) => {
+    setIsLoading(true);
+    for (const base of apiUrls) {
+      try {
+        const res = await fetch(`${base}/visits/admin/timeline?date=${date}`);
+        if (res.ok) { setTimeline(await res.json()); break; }
+      } catch {}
+    }
+    setIsLoading(false);
+  };
+
+  React.useEffect(() => { fetchTimeline(selectedDate); }, [selectedDate]);
+
+  const selected = timeline.find(t => t.user_id === selectedUserId) || (timeline.length > 0 ? timeline[0] : null);
+
+  return (
+    <div style={{ display: 'flex', height: '100%', gap: 0 }}>
+      {/* Left: officer list */}
+      <div style={{ width: 280, borderRight: '1px solid #E2E8F0', overflowY: 'auto', background: '#FAFAFA' }}>
+        <div style={{ padding: '14px 16px', borderBottom: '1px solid #E2E8F0', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input
+            type="date"
+            value={selectedDate}
+            onChange={e => setSelectedDate(e.target.value)}
+            style={{ fontSize: 12, padding: '4px 8px', border: '1px solid #E2E8F0', borderRadius: 6, flex: 1 }}
+          />
+        </div>
+        <div style={{ padding: '8px 0' }}>
+          {timeline.map(t => (
+            <div
+              key={t.user_id}
+              onClick={() => setSelectedUserId(t.user_id)}
+              style={{
+                padding: '12px 16px', cursor: 'pointer',
+                background: selected?.user_id === t.user_id ? '#EFF6FF' : 'transparent',
+                borderLeft: selected?.user_id === t.user_id ? '3px solid #2563EB' : '3px solid transparent',
+              }}
+            >
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#111827' }}>{t.name}</div>
+              <div style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>
+                {t.total_meetings} visits · {formatDurMin(t.total_minutes)}
+              </div>
+            </div>
+          ))}
+          {timeline.length === 0 && !isLoading && (
+            <div style={{ padding: 24, textAlign: 'center', color: '#9CA3AF', fontSize: 13 }}>
+              No visits found for this date
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Right: visit timeline for selected officer */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: 20 }}>
+        {selected ? (
+          <>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 18, fontWeight: 800, color: '#111827' }}>{selected.name}</div>
+              <div style={{ fontSize: 12, color: '#6B7280' }}>{selected.email} · {fmtDateLabel(selectedDate + 'T00:00:00')}</div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                <span style={{ background: '#EFF6FF', color: '#2563EB', borderRadius: 8, padding: '4px 12px', fontSize: 12, fontWeight: 700 }}>
+                  {selected.total_meetings} meetings
+                </span>
+                <span style={{ background: '#ECFDF5', color: '#10B981', borderRadius: 8, padding: '4px 12px', fontSize: 12, fontWeight: 700 }}>
+                  {formatDurMin(selected.total_minutes)}
+                </span>
+              </div>
+            </div>
+            {selected.visits.map((v, i) => (
+              <div key={v.id} style={{
+                background: '#FFF', borderRadius: 12, padding: '14px 16px', marginBottom: 10,
+                border: '1px solid #E5E7EB', display: 'flex', alignItems: 'flex-start', gap: 14,
+              }}>
+                <div style={{ width: 32, height: 32, borderRadius: 8, background: '#EFF6FF', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <Navigation size={14} color="#2563EB" />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: '#111827' }}>
+                    {v.customers?.name || 'Unknown customer'}
+                  </div>
+                  {v.customers?.village && (
+                    <div style={{ fontSize: 12, color: '#6B7280' }}>{[v.customers.village, v.customers.taluka].filter(Boolean).join(', ')}</div>
+                  )}
+                  <div style={{ fontSize: 12, color: '#6B7280', marginTop: 4 }}>
+                    IN: {fmtTime(v.checked_in_at)} &nbsp;→&nbsp; OUT: {fmtTime(v.checked_out_at)}
+                  </div>
+                  {v.notes && <div style={{ fontSize: 12, color: '#9CA3AF', marginTop: 4, fontStyle: 'italic' }}>{v.notes}</div>}
+                </div>
+                <div style={{ background: '#ECFDF5', borderRadius: 8, padding: '4px 10px', fontSize: 12, fontWeight: 700, color: '#10B981', flexShrink: 0 }}>
+                  {formatDurMin(v.duration_minutes)}
+                </div>
+              </div>
+            ))}
+            {selected.visits.length === 0 && (
+              <div style={{ textAlign: 'center', padding: 40, color: '#9CA3AF' }}>No visits recorded for this officer today.</div>
+            )}
+          </>
+        ) : (
+          <div style={{ textAlign: 'center', padding: 60, color: '#9CA3AF' }}>
+            Select a field officer to view their visit timeline.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TEAM MANAGEMENT TAB
+// ═══════════════════════════════════════════════════════════════
+
+interface UserProfile {
+  id: string;
+  full_name: string;
+  role: string;
+  caller_id: string | null;
+  caller_name?: string | null;
+  email?: string;
+}
+
+function TeamManagementTab({ apiUrls }: { apiUrls: string[] }) {
+  const [users, setUsers] = React.useState<UserProfile[]>([]);
+  const [callers, setCallers] = React.useState<UserProfile[]>([]);
+  const [isLoading, setIsLoading] = React.useState(false);
+  const [assignState, setAssignState] = React.useState<Record<string, string>>({});
+  const [saving, setSaving] = React.useState<string | null>(null);
+  const [message, setMessage] = React.useState<string | null>(null);
+
+  const load = async () => {
+    setIsLoading(true);
+    for (const base of apiUrls) {
+      try {
+        const [usersRes, callersRes] = await Promise.all([
+          fetch(`${base}/admin/all-users`),
+          fetch(`${base}/admin/callers`),
+        ]);
+        if (usersRes.ok && callersRes.ok) {
+          setUsers(await usersRes.json());
+          setCallers(await callersRes.json());
+          break;
+        }
+      } catch {}
+    }
+    setIsLoading(false);
+  };
+
+  React.useEffect(() => { load(); }, []);
+
+  const fieldOfficers = users.filter(u => u.role === 'field_officer');
+
+  const handleAssign = async (officerId: string) => {
+    const callerId = assignState[officerId];
+    if (!callerId) return;
+    setSaving(officerId);
+    for (const base of apiUrls) {
+      try {
+        const res = await fetch(`${base}/admin/profiles/assign`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ field_officer_id: officerId, caller_id: callerId }),
+        });
+        if (res.ok) {
+          setMessage('Assignment saved successfully.');
+          await load();
+          break;
+        }
+      } catch {}
+    }
+    setSaving(null);
+    setTimeout(() => setMessage(null), 3000);
+  };
+
+  const handleRoleChange = async (userId: string, newRole: string) => {
+    for (const base of apiUrls) {
+      try {
+        const res = await fetch(`${base}/admin/profiles/${userId}/role`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ role: newRole }),
+        });
+        if (res.ok) { await load(); break; }
+      } catch {}
+    }
+  };
+
+  return (
+    <div style={{ padding: 24, maxWidth: 900, margin: '0 auto' }}>
+      <div style={{ marginBottom: 20, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: '#111827' }}>Team Management</div>
+          <div style={{ fontSize: 13, color: '#6B7280', marginTop: 2 }}>Assign field officers to callers · Manage roles</div>
+        </div>
+        {message && (
+          <div style={{ background: '#ECFDF5', color: '#10B981', borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 600 }}>
+            ✓ {message}
+          </div>
+        )}
+      </div>
+
+      {isLoading ? (
+        <div style={{ textAlign: 'center', padding: 40, color: '#9CA3AF' }}>Loading…</div>
+      ) : (
+        <>
+          {/* Callers section */}
+          <div style={{ marginBottom: 24 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#374151', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Callers ({callers.length})
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+              {callers.map(c => (
+                <div key={c.id} style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 10, padding: '10px 14px' }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#1D4ED8' }}>{c.full_name}</div>
+                  <div style={{ fontSize: 11, color: '#6B7280' }}>{c.email}</div>
+                  <div style={{ fontSize: 11, color: '#60A5FA', marginTop: 4 }}>
+                    {fieldOfficers.filter(f => f.caller_id === c.id).length} officers assigned
+                  </div>
+                </div>
+              ))}
+              {callers.length === 0 && (
+                <div style={{ color: '#9CA3AF', fontSize: 13 }}>No callers yet. Change a user's role to "caller" below.</div>
+              )}
+            </div>
+          </div>
+
+          {/* Field officers table */}
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#374151', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Field Officers ({fieldOfficers.length})
+            </div>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ borderBottom: '2px solid #E5E7EB' }}>
+                  <th style={{ textAlign: 'left', padding: '8px 12px', color: '#6B7280', fontWeight: 600 }}>Name / Email</th>
+                  <th style={{ textAlign: 'left', padding: '8px 12px', color: '#6B7280', fontWeight: 600 }}>Assigned Caller</th>
+                  <th style={{ textAlign: 'left', padding: '8px 12px', color: '#6B7280', fontWeight: 600 }}>Change Assignment</th>
+                  <th style={{ textAlign: 'left', padding: '8px 12px', color: '#6B7280', fontWeight: 600 }}>Role</th>
+                </tr>
+              </thead>
+              <tbody>
+                {fieldOfficers.map(fo => (
+                  <tr key={fo.id} style={{ borderBottom: '1px solid #F3F4F6' }}>
+                    <td style={{ padding: '10px 12px' }}>
+                      <div style={{ fontWeight: 600, color: '#111827' }}>{fo.full_name}</div>
+                      <div style={{ fontSize: 11, color: '#9CA3AF' }}>{fo.email}</div>
+                    </td>
+                    <td style={{ padding: '10px 12px' }}>
+                      {fo.caller_id
+                        ? <span style={{ color: '#2563EB', fontWeight: 600 }}>{callers.find(c => c.id === fo.caller_id)?.full_name || fo.caller_id.slice(0, 8)}</span>
+                        : <span style={{ color: '#F59E0B', fontSize: 11 }}>Unassigned</span>
+                      }
+                    </td>
+                    <td style={{ padding: '10px 12px' }}>
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                        <select
+                          value={assignState[fo.id] || fo.caller_id || ''}
+                          onChange={e => setAssignState(s => ({ ...s, [fo.id]: e.target.value }))}
+                          style={{ fontSize: 12, padding: '4px 8px', border: '1px solid #E5E7EB', borderRadius: 6 }}
+                        >
+                          <option value="">— select caller —</option>
+                          {callers.map(c => <option key={c.id} value={c.id}>{c.full_name}</option>)}
+                        </select>
+                        <button
+                          onClick={() => handleAssign(fo.id)}
+                          disabled={saving === fo.id || !assignState[fo.id]}
+                          style={{ fontSize: 11, padding: '4px 10px', background: '#2563EB', color: '#FFF', border: 'none', borderRadius: 6, cursor: 'pointer', opacity: (!assignState[fo.id] || saving === fo.id) ? 0.5 : 1 }}
+                        >
+                          {saving === fo.id ? '…' : 'Save'}
+                        </button>
+                      </div>
+                    </td>
+                    <td style={{ padding: '10px 12px' }}>
+                      <select
+                        value={fo.role}
+                        onChange={e => handleRoleChange(fo.id, e.target.value)}
+                        style={{ fontSize: 12, padding: '4px 8px', border: '1px solid #E5E7EB', borderRadius: 6 }}
+                      >
+                        <option value="field_officer">Field Officer</option>
+                        <option value="caller">Caller</option>
+                        <option value="admin">Admin</option>
+                      </select>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* All users role summary */}
+          <div style={{ marginTop: 32 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#374151', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              All Users
+            </div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              {users.map(u => (
+                <div key={u.id} style={{ background: '#F9FAFB', border: '1px solid #E5E7EB', borderRadius: 8, padding: '8px 12px', fontSize: 12 }}>
+                  <span style={{ fontWeight: 600 }}>{u.full_name}</span>
+                  <span style={{ marginLeft: 6, padding: '2px 6px', borderRadius: 4, fontSize: 10, background: u.role === 'admin' ? '#FEF3C7' : u.role === 'caller' ? '#EFF6FF' : '#F3F4F6', color: u.role === 'admin' ? '#92400E' : u.role === 'caller' ? '#1D4ED8' : '#374151' }}>
+                    {u.role}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'map' | 'report'>('map');
+  const [activeTab, setActiveTab] = useState<'map' | 'report' | 'visits' | 'team'>('map');
   const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [officers, setOfficers] = useState<FieldOfficer[]>([]);
   const [filteredOfficers, setFilteredOfficers] = useState<FieldOfficer[]>([]);
@@ -490,11 +842,9 @@ export default function App() {
             <span className="kpi-value">{overview.total_officers}</span>
           </div>
           <div className="kpi-footer">
-            <span className="trend-badge-active">
-              <span className="pulse-dot" />
-              {overview.active_officers_today} active
+            <span style={{ color: 'var(--text-secondary)' }}>
+              {overview.active_officers_today} active &mdash; {overview.total_officers} total
             </span>
-            <span>on route today</span>
           </div>
         </div>
 
@@ -565,7 +915,21 @@ export default function App() {
           onClick={() => setActiveTab('report')}
         >
           <FileSpreadsheet size={13} strokeWidth={1.5} />
-          <span>Daily Travel & Allowance Report</span>
+          <span>Daily Travel &amp; Allowance Report</span>
+        </button>
+        <button
+          className={`tab-item ${activeTab === 'visits' ? 'active' : ''}`}
+          onClick={() => setActiveTab('visits')}
+        >
+          <Navigation size={13} strokeWidth={1.5} />
+          <span>Visit Timeline</span>
+        </button>
+        <button
+          className={`tab-item ${activeTab === 'team' ? 'active' : ''}`}
+          onClick={() => setActiveTab('team')}
+        >
+          <Users size={13} strokeWidth={1.5} />
+          <span>Team Management</span>
         </button>
       </div>
 
@@ -614,9 +978,7 @@ export default function App() {
                       </div>
                       <div className="officer-meta">
                         <span className="officer-name">{officer.name}</span>
-                        <span className="officer-trips-sub">
-                          {officer.sessions_count_today} {officer.sessions_count_today === 1 ? 'session' : 'sessions'} today
-                        </span>
+                        <span className="officer-trips-sub">{officer.email}</span>
                       </div>
                     </div>
 
@@ -625,7 +987,6 @@ export default function App() {
                         {officer.today_distance_km.toFixed(1)} km
                       </span>
                       <span className={`status-pill ${officer.status}`}>
-                        {officer.status === 'active' && <span className="pulse-dot" />}
                         {officer.status === 'active' ? 'On Route' : 'Idle'}
                       </span>
                     </div>
@@ -651,9 +1012,8 @@ export default function App() {
                   {selectedOfficer ? selectedOfficer.name : 'Select an Officer'}
                 </span>
                 {selectedOfficer && (
-                  <span className={`status-pill ${selectedOfficer.status}`}>
-                    {selectedOfficer.status === 'active' && <span className="pulse-dot" />}
-                    {selectedOfficer.status === 'active' ? 'Live Tracking' : 'Completed'}
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                    {selectedOfficer.email}
                   </span>
                 )}
               </div>
@@ -761,9 +1121,9 @@ export default function App() {
                       <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{off.email}</div>
                     </td>
                     <td>
-                      <code style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-secondary)' }}>
-                        {off.user_id.substring(0, 8)}
-                      </code>
+                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                        {off.email}
+                      </span>
                     </td>
                     <td>
                       <span
@@ -805,6 +1165,16 @@ export default function App() {
             </table>
           </div>
         </div>
+      )}
+
+      {/* Tab 3: Visit Timeline */}
+      {activeTab === 'visits' && (
+        <VisitTimelineTab apiUrls={API_URLS} officers={officers} />
+      )}
+
+      {/* Tab 4: Team Management */}
+      {activeTab === 'team' && (
+        <TeamManagementTab apiUrls={API_URLS} />
       )}
     </div>
   );
