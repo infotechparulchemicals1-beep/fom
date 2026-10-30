@@ -5,3 +5,4 @@
 
 ALTER TABLE customer_visits 
 ADD COLUMN IF NOT EXISTS photo_urls JSONB DEFAULT '[]'::jsonb;
+
