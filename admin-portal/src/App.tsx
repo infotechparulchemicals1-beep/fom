@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import {
@@ -12,48 +12,51 @@ import {
   Search,
   FileSpreadsheet,
   Navigation,
-  Layers,
-  ChevronRight,
+  ChevronDown,
+  ChevronUp,
+  LogIn,
+  UserCheck,
+  MapPin,
+  CheckCircle,
+  AlertCircle,
+  Shield,
+  Phone,
+  User,
 } from 'lucide-react';
+import './index.css';
 
-// Types
-interface OverviewStats {
-  total_officers: number;
-  active_officers_today: number;
-  total_distance_km_today: number;
-  total_distance_km_all_time: number;
-  total_sessions_today: number;
-  report_date: string;
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface VisitEntry {
+  id: string;
+  user_id: string;
+  customer_id: string;
+  checked_in_at: string;
+  checked_out_at?: string | null;
+  duration_minutes?: number | null;
+  checkin_lat?: number | null;
+  checkin_lng?: number | null;
+  notes?: string | null;
+  sync_status?: string;
+  customers?: { name: string; village?: string; taluka?: string; district?: string } | null;
 }
 
-interface FieldOfficer {
+interface OfficerTimeline {
   user_id: string;
   name: string;
   email: string;
-  status: 'active' | 'idle';
-  today_distance_km: number;
-  total_distance_km: number;
-  sessions_count_today: number;
-  total_sessions_count: number;
-  last_active_at: string | null;
-  latest_session_id: string | null;
-  last_location?: {
-    latitude: number;
-    longitude: number;
-    recorded_at: string;
-    speed_mps?: number;
-  } | null;
+  total_meetings: number;
+  total_minutes: number;
+  visits: VisitEntry[];
 }
 
-interface OfficerSession {
+interface UserProfile {
   id: string;
-  session_number: number;
-  session_label: string;
-  started_at: string;
-  ended_at: string | null;
-  duration_seconds: number | null;
-  total_distance_km: number;
-  status: string;
+  full_name?: string | null;
+  role: 'admin' | 'caller' | 'field_officer';
+  caller_id?: string | null;
+  caller_name?: string | null;
+  email?: string;
 }
 
 interface RoutePoint {
@@ -63,6 +66,8 @@ interface RoutePoint {
   accuracy_m?: number;
   speed_mps?: number;
 }
+
+// ─── Config ────────────────────────────────────────────────────────────────────
 
 const customApiUrl = import.meta.env.VITE_API_URL
   ? import.meta.env.VITE_API_URL.replace(/\/+$/, '').endsWith('/api/v1')
@@ -75,361 +80,498 @@ const API_URLS = [
   'https://fom-1.onrender.com/api/v1',
   'http://localhost:8000/api/v1',
   'http://localhost:8001/api/v1',
-  'http://127.0.0.1:8000/api/v1',
 ];
 
-async function apiFetch(endpoint: string) {
+// ─── API helpers ──────────────────────────────────────────────────────────────
+
+async function apiFetch(endpoint: string, token?: string): Promise<any> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
   for (const base of API_URLS) {
     try {
-      const res = await fetch(`${base}${endpoint}`);
-      if (res.ok) {
-        return await res.json();
-      }
-    } catch {
-      // try next
-    }
+      const res = await fetch(`${base}${endpoint}`, { headers });
+      if (res.ok) return await res.json();
+    } catch { /* try next */ }
   }
   return null;
 }
 
-// Sample fallback data
-const MOCK_OFFICERS: FieldOfficer[] = [
-  {
-    user_id: 'off-01',
-    name: 'Rajesh Sharma',
-    email: 'rajesh.sharma@fscdairy.in',
-    status: 'active',
-    today_distance_km: 26.4,
-    total_distance_km: 312.8,
-    sessions_count_today: 2,
-    total_sessions_count: 18,
-    last_active_at: new Date().toISOString(),
-    latest_session_id: 'sess-01',
-    last_location: { latitude: 19.076, longitude: 72.8777, recorded_at: new Date().toISOString() },
-  },
-  {
-    user_id: 'off-02',
-    name: 'Suresh Patel',
-    email: 'suresh.patel@fscdairy.in',
-    status: 'idle',
-    today_distance_km: 19.8,
-    total_distance_km: 245.0,
-    sessions_count_today: 1,
-    total_sessions_count: 14,
-    last_active_at: new Date(Date.now() - 3600000 * 2).toISOString(),
-    latest_session_id: 'sess-02',
-    last_location: { latitude: 19.1136, longitude: 72.8697, recorded_at: new Date().toISOString() },
-  },
-  {
-    user_id: 'off-03',
-    name: 'Anil Deshmukh',
-    email: 'anil.d@fscdairy.in',
-    status: 'active',
-    today_distance_km: 14.2,
-    total_distance_km: 189.5,
-    sessions_count_today: 1,
-    total_sessions_count: 9,
-    last_active_at: new Date().toISOString(),
-    latest_session_id: 'sess-03',
-    last_location: { latitude: 19.033, longitude: 73.0297, recorded_at: new Date().toISOString() },
-  },
-  {
-    user_id: 'off-04',
-    name: 'Vikram Joshi',
-    email: 'vikram.j@fscdairy.in',
-    status: 'idle',
-    today_distance_km: 0.0,
-    total_distance_km: 98.4,
-    sessions_count_today: 0,
-    total_sessions_count: 6,
-    last_active_at: null,
-    latest_session_id: null,
-  },
-];
-
-const MOCK_SESSIONS: OfficerSession[] = [
-  {
-    id: 'sess-01',
-    session_number: 2,
-    session_label: 'Session 2',
-    started_at: new Date(Date.now() - 3600000 * 1.5).toISOString(),
-    ended_at: null,
-    duration_seconds: 5400,
-    total_distance_km: 14.8,
-    status: 'active',
-  },
-  {
-    id: 'sess-02',
-    session_number: 1,
-    session_label: 'Session 1',
-    started_at: new Date(Date.now() - 3600000 * 6).toISOString(),
-    ended_at: new Date(Date.now() - 3600000 * 3.5).toISOString(),
-    duration_seconds: 9000,
-    total_distance_km: 11.6,
-    status: 'completed',
-  },
-];
-
-function generateMockRoute(centerLat: number, centerLon: number, pointsCount = 35): RoutePoint[] {
-  const points: RoutePoint[] = [];
-  let curLat = centerLat;
-  let curLon = centerLon;
-  const now = Date.now();
-
-  for (let i = 0; i < pointsCount; i++) {
-    curLat += (Math.random() - 0.45) * 0.005;
-    curLon += (Math.random() - 0.42) * 0.005;
-    points.push({
-      latitude: curLat,
-      longitude: curLon,
-      recorded_at: new Date(now - (pointsCount - i) * 60000).toISOString(),
-      speed_mps: Math.random() * 8 + 2,
-      accuracy_m: Math.floor(Math.random() * 10 + 5),
-    });
+async function apiPost(endpoint: string, body: object, token?: string): Promise<any> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  for (const base of API_URLS) {
+    try {
+      const res = await fetch(`${base}${endpoint}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      });
+      if (res.ok) return await res.json();
+    } catch { /* try next */ }
   }
-  return points;
+  return null;
 }
 
-// ═══════════════════════════════════════════════════════════════
-// VISIT TIMELINE TAB
-// ═══════════════════════════════════════════════════════════════
-
-interface VisitEntry {
-  id: string;
-  user_id: string;
-  customer_id: string;
-  checked_in_at: string;
-  checked_out_at: string | null;
-  duration_minutes: number | null;
-  notes: string | null;
-  customers?: { name: string; village?: string; taluka?: string };
+async function apiPut(endpoint: string, body: object, token?: string): Promise<any> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  for (const base of API_URLS) {
+    try {
+      const res = await fetch(`${base}${endpoint}`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify(body),
+      });
+      if (res.ok) return await res.json();
+    } catch { /* try next */ }
+  }
+  return null;
 }
 
-interface OfficerTimeline {
-  user_id: string;
-  name: string;
-  email: string;
-  total_meetings: number;
-  total_minutes: number;
-  visits: VisitEntry[];
-}
+// ─── Formatters ──────────────────────────────────────────────────────────────
 
-function formatDurMin(min: number | null) {
-  if (!min) return '—';
-  const h = Math.floor(min / 60); const m = min % 60;
-  return h > 0 ? `${h}h ${m}m` : `${m}m`;
-}
-function fmtTime(iso: string | null) {
+function fmtTime(iso?: string | null): string {
   if (!iso) return '—';
-  return new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false });
-}
-function fmtDateLabel(iso: string) {
-  return new Date(iso).toLocaleDateString('en-IN', { weekday:'short', day:'numeric', month:'short' });
+  return new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
 }
 
-function VisitTimelineTab({ apiUrls, officers }: { apiUrls: string[]; officers: FieldOfficer[] }) {
-  const [selectedUserId, setSelectedUserId] = React.useState<string | null>(null);
-  const [timeline, setTimeline] = React.useState<OfficerTimeline[]>([]);
-  const [selectedDate, setSelectedDate] = React.useState(() => new Date().toISOString().slice(0, 10));
-  const [isLoading, setIsLoading] = React.useState(false);
+function fmtDur(minutes?: number | null): string {
+  if (!minutes || minutes <= 0) return '—';
+  if (minutes < 60) return `${minutes}m`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
+}
 
-  const fetchTimeline = async (date: string) => {
-    setIsLoading(true);
-    for (const base of apiUrls) {
-      try {
-        const res = await fetch(`${base}/visits/admin/timeline?date=${date}`);
-        if (res.ok) { setTimeline(await res.json()); break; }
-      } catch {}
+function todayIST(): string {
+  const now = new Date();
+  const ist = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
+  return ist.toISOString().slice(0, 10);
+}
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
+// Token login banner
+function TokenBanner({ token, onSet }: { token: string; onSet: (t: string) => void }) {
+  const [val, setVal] = useState('');
+  if (token) return (
+    <div style={{ background: '#ECFDF5', borderBottom: '1px solid #BBF7D0', padding: '8px 20px', display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#059669' }}>
+      <CheckCircle size={14} /> Admin token active — authenticated requests enabled
+      <button onClick={() => onSet('')} style={{ marginLeft: 'auto', fontSize: 11, color: '#DC2626', background: 'none', border: 'none', cursor: 'pointer' }}>Clear</button>
+    </div>
+  );
+  return (
+    <div style={{ background: '#FEF3C7', borderBottom: '1px solid #FDE68A', padding: '8px 20px', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+      <AlertCircle size={14} color="#D97706" />
+      <span style={{ fontSize: 12, color: '#92400E' }}>Paste your admin JWT to enable authenticated endpoints:</span>
+      <input
+        value={val}
+        onChange={e => setVal(e.target.value)}
+        placeholder="eyJhbGci..."
+        style={{ flex: 1, minWidth: 200, fontSize: 11, padding: '4px 8px', border: '1px solid #FDE68A', borderRadius: 6, fontFamily: 'monospace' }}
+      />
+      <button
+        onClick={() => { if (val.trim()) onSet(val.trim()); }}
+        style={{ background: '#2563EB', color: '#fff', border: 'none', borderRadius: 6, padding: '5px 14px', cursor: 'pointer', fontSize: 12 }}
+      >
+        Set Token
+      </button>
+      <span style={{ fontSize: 11, color: '#78350F' }}>
+        (Get from mobile app DevTools or Supabase Auth → Users → JWT)
+      </span>
+    </div>
+  );
+}
+
+// ─── Tab: Visit Dashboard (replaces old map tab) ─────────────────────────────
+
+function VisitDashboardTab({ token }: { token: string }) {
+  const [date, setDate] = useState(todayIST());
+  const [timeline, setTimeline] = useState<OfficerTimeline[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [selected, setSelected] = useState<OfficerTimeline | null>(null);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const data = await apiFetch(`/visits/admin/timeline?date=${date}`, token);
+    if (Array.isArray(data)) {
+      setTimeline(data);
+      if (data.length > 0 && !selected) setSelected(data[0]);
     }
-    setIsLoading(false);
-  };
+    setLoading(false);
+  }, [date, token]);
 
-  React.useEffect(() => { fetchTimeline(selectedDate); }, [selectedDate]);
+  useEffect(() => { load(); }, [load]);
 
-  const selected = timeline.find(t => t.user_id === selectedUserId) || (timeline.length > 0 ? timeline[0] : null);
+  const totalVisits = timeline.reduce((a, o) => a + o.total_meetings, 0);
+  const totalMinutes = timeline.reduce((a, o) => a + o.total_minutes, 0);
+  const activeOfficers = timeline.filter(o => o.visits.some(v => !v.checked_out_at)).length;
 
   return (
-    <div style={{ display: 'flex', height: '100%', gap: 0 }}>
-      {/* Left: officer list */}
-      <div style={{ width: 280, borderRight: '1px solid #E2E8F0', overflowY: 'auto', background: '#FAFAFA' }}>
-        <div style={{ padding: '14px 16px', borderBottom: '1px solid #E2E8F0', display: 'flex', alignItems: 'center', gap: 8 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      {/* Top stats bar */}
+      <div style={{ display: 'flex', gap: 16, padding: '16px 20px', borderBottom: '1px solid #E2E8F0', background: '#FAFAFA', flexWrap: 'wrap' }}>
+        {[
+          { icon: <Users size={16} color="#2563EB" />, label: 'Officers Active', value: `${activeOfficers} / ${timeline.length}` },
+          { icon: <CheckCircle size={16} color="#10B981" />, label: 'Total Visits', value: totalVisits },
+          { icon: <Clock size={16} color="#7C3AED" />, label: 'Total Time', value: fmtDur(totalMinutes) },
+          { icon: <Activity size={16} color="#F59E0B" />, label: 'In Progress', value: timeline.reduce((a, o) => a + o.visits.filter(v => !v.checked_out_at).length, 0) },
+        ].map((s, i) => (
+          <div key={i} style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 12, padding: '10px 18px', display: 'flex', alignItems: 'center', gap: 10, flex: '1 1 150px' }}>
+            <div style={{ background: '#F0F9FF', borderRadius: 8, padding: 6 }}>{s.icon}</div>
+            <div>
+              <div style={{ fontSize: 20, fontWeight: 800, color: '#111827' }}>{s.value}</div>
+              <div style={{ fontSize: 11, color: '#6B7280' }}>{s.label}</div>
+            </div>
+          </div>
+        ))}
+
+        {/* Date picker */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
+          <Calendar size={14} color="#6B7280" />
           <input
             type="date"
-            value={selectedDate}
-            onChange={e => setSelectedDate(e.target.value)}
-            style={{ fontSize: 12, padding: '4px 8px', border: '1px solid #E2E8F0', borderRadius: 6, flex: 1 }}
+            value={date}
+            onChange={e => setDate(e.target.value)}
+            style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: '6px 10px', fontSize: 13 }}
           />
-        </div>
-        <div style={{ padding: '8px 0' }}>
-          {timeline.map(t => (
-            <div
-              key={t.user_id}
-              onClick={() => setSelectedUserId(t.user_id)}
-              style={{
-                padding: '12px 16px', cursor: 'pointer',
-                background: selected?.user_id === t.user_id ? '#EFF6FF' : 'transparent',
-                borderLeft: selected?.user_id === t.user_id ? '3px solid #2563EB' : '3px solid transparent',
-              }}
-            >
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#111827' }}>{t.name}</div>
-              <div style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>
-                {t.total_meetings} visits · {formatDurMin(t.total_minutes)}
-              </div>
-            </div>
-          ))}
-          {timeline.length === 0 && !isLoading && (
-            <div style={{ padding: 24, textAlign: 'center', color: '#9CA3AF', fontSize: 13 }}>
-              No visits found for this date
-            </div>
-          )}
+          <button onClick={load} disabled={loading} style={{ background: '#2563EB', color: '#fff', border: 'none', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+            <RefreshCw size={13} /> {loading ? 'Loading…' : 'Refresh'}
+          </button>
         </div>
       </div>
 
-      {/* Right: visit timeline for selected officer */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: 20 }}>
-        {selected ? (
-          <>
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 18, fontWeight: 800, color: '#111827' }}>{selected.name}</div>
-              <div style={{ fontSize: 12, color: '#6B7280' }}>{selected.email} · {fmtDateLabel(selectedDate + 'T00:00:00')}</div>
-              <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                <span style={{ background: '#EFF6FF', color: '#2563EB', borderRadius: 8, padding: '4px 12px', fontSize: 12, fontWeight: 700 }}>
-                  {selected.total_meetings} meetings
-                </span>
-                <span style={{ background: '#ECFDF5', color: '#10B981', borderRadius: 8, padding: '4px 12px', fontSize: 12, fontWeight: 700 }}>
-                  {formatDurMin(selected.total_minutes)}
-                </span>
-              </div>
-            </div>
-            {selected.visits.map((v, i) => (
-              <div key={v.id} style={{
-                background: '#FFF', borderRadius: 12, padding: '14px 16px', marginBottom: 10,
-                border: '1px solid #E5E7EB', display: 'flex', alignItems: 'flex-start', gap: 14,
-              }}>
-                <div style={{ width: 32, height: 32, borderRadius: 8, background: '#EFF6FF', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                  <Navigation size={14} color="#2563EB" />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: '#111827' }}>
-                    {v.customers?.name || 'Unknown customer'}
-                  </div>
-                  {v.customers?.village && (
-                    <div style={{ fontSize: 12, color: '#6B7280' }}>{[v.customers.village, v.customers.taluka].filter(Boolean).join(', ')}</div>
-                  )}
-                  <div style={{ fontSize: 12, color: '#6B7280', marginTop: 4 }}>
-                    IN: {fmtTime(v.checked_in_at)} &nbsp;→&nbsp; OUT: {fmtTime(v.checked_out_at)}
-                  </div>
-                  {v.notes && <div style={{ fontSize: 12, color: '#9CA3AF', marginTop: 4, fontStyle: 'italic' }}>{v.notes}</div>}
-                </div>
-                <div style={{ background: '#ECFDF5', borderRadius: 8, padding: '4px 10px', fontSize: 12, fontWeight: 700, color: '#10B981', flexShrink: 0 }}>
-                  {formatDurMin(v.duration_minutes)}
-                </div>
-              </div>
-            ))}
-            {selected.visits.length === 0 && (
-              <div style={{ textAlign: 'center', padding: 40, color: '#9CA3AF' }}>No visits recorded for this officer today.</div>
-            )}
-          </>
-        ) : (
-          <div style={{ textAlign: 'center', padding: 60, color: '#9CA3AF' }}>
-            Select a field officer to view their visit timeline.
+      {/* Main content */}
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+        {/* Left: officer list */}
+        <div style={{ width: 280, borderRight: '1px solid #E2E8F0', overflowY: 'auto', background: '#FAFAFA' }}>
+          <div style={{ padding: '12px 14px', borderBottom: '1px solid #E2E8F0', fontSize: 12, fontWeight: 700, color: '#374151', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Field Officers ({timeline.length})
           </div>
-        )}
+          {timeline.length === 0 && !loading && (
+            <div style={{ padding: 24, textAlign: 'center', color: '#9CA3AF', fontSize: 13 }}>
+              {token ? 'No visits recorded for this date.' : 'Set admin token to load data.'}
+            </div>
+          )}
+          {timeline.map(officer => {
+            const isActive = officer.visits.some(v => !v.checked_out_at);
+            const isSelected = selected?.user_id === officer.user_id;
+            return (
+              <div
+                key={officer.user_id}
+                onClick={() => setSelected(officer)}
+                style={{
+                  padding: '12px 14px',
+                  cursor: 'pointer',
+                  background: isSelected ? '#EFF6FF' : 'transparent',
+                  borderLeft: isSelected ? '3px solid #2563EB' : '3px solid transparent',
+                  borderBottom: '1px solid #F1F5F9',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#111827' }}>{officer.name || officer.email}</div>
+                  <div style={{ background: isActive ? '#ECFDF5' : '#F3F4F6', color: isActive ? '#059669' : '#6B7280', fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 20 }}>
+                    {isActive ? 'ACTIVE' : 'IDLE'}
+                  </div>
+                </div>
+                <div style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>{officer.email}</div>
+                <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+                  <span style={{ fontSize: 12, color: '#2563EB', fontWeight: 600 }}>{officer.total_meetings} visits</span>
+                  <span style={{ fontSize: 12, color: '#6B7280' }}>{fmtDur(officer.total_minutes)}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Right: visit detail */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: 20 }}>
+          {selected ? (
+            <div>
+              {/* Officer header */}
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 20, fontWeight: 800, color: '#111827' }}>{selected.name || selected.email}</div>
+                <div style={{ fontSize: 13, color: '#6B7280', marginTop: 2 }}>{selected.email}</div>
+                <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
+                  <span style={{ background: '#EFF6FF', color: '#2563EB', borderRadius: 8, padding: '4px 12px', fontSize: 13, fontWeight: 700 }}>
+                    {selected.total_meetings} completed visits
+                  </span>
+                  <span style={{ background: '#ECFDF5', color: '#10B981', borderRadius: 8, padding: '4px 12px', fontSize: 13, fontWeight: 700 }}>
+                    {fmtDur(selected.total_minutes)} total time
+                  </span>
+                  <span style={{ background: '#FEF3C7', color: '#D97706', borderRadius: 8, padding: '4px 12px', fontSize: 13, fontWeight: 700 }}>
+                    {selected.visits.filter(v => !v.checked_out_at).length} in progress
+                  </span>
+                </div>
+              </div>
+
+              {/* Visit cards */}
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 10 }}>
+                All Visits
+              </div>
+              {selected.visits.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: 40, color: '#9CA3AF' }}>No visits for this officer today.</div>
+              ) : (
+                selected.visits.map((v, i) => {
+                  const isComplete = !!v.checked_out_at;
+                  return (
+                    <div key={v.id} style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 12, padding: 16, marginBottom: 10, display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                      {/* Step number */}
+                      <div style={{ width: 28, height: 28, borderRadius: 8, background: isComplete ? '#ECFDF5' : '#FEF3C7', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: 12, fontWeight: 800, color: isComplete ? '#059669' : '#D97706' }}>
+                        {i + 1}
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: '#111827' }}>
+                          {v.customers?.name || 'Unknown Customer'}
+                        </div>
+                        {v.customers && (v.customers.village || v.customers.taluka) && (
+                          <div style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>
+                            📍 {[v.customers.village, v.customers.taluka, v.customers.district].filter(Boolean).join(', ')}
+                          </div>
+                        )}
+                        <div style={{ display: 'flex', gap: 16, marginTop: 6, flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: 12, color: '#374151' }}>
+                            <strong>IN:</strong> {fmtTime(v.checked_in_at)}
+                          </span>
+                          <span style={{ fontSize: 12, color: '#374151' }}>
+                            <strong>OUT:</strong> {fmtTime(v.checked_out_at)}
+                          </span>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: '#2563EB' }}>
+                            ⏱ {fmtDur(v.duration_minutes)}
+                          </span>
+                          <span style={{
+                            fontSize: 11,
+                            fontWeight: 700,
+                            padding: '2px 8px',
+                            borderRadius: 6,
+                            background: isComplete ? '#ECFDF5' : '#FEF3C7',
+                            color: isComplete ? '#059669' : '#D97706',
+                          }}>
+                            {isComplete ? 'Completed' : 'In Progress'}
+                          </span>
+                        </div>
+                        {v.notes && (
+                          <div style={{ fontSize: 12, color: '#6B7280', marginTop: 6, fontStyle: 'italic' }}>
+                            💬 {v.notes}
+                          </div>
+                        )}
+                        {(v.checkin_lat && v.checkin_lng) && (
+                          <div style={{ fontSize: 11, color: '#9CA3AF', marginTop: 4 }}>
+                            🗺 {v.checkin_lat.toFixed(5)}, {v.checkin_lng.toFixed(5)}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          ) : (
+            <div style={{ textAlign: 'center', padding: 60, color: '#9CA3AF' }}>
+              Select a field officer from the list to view their visit details.
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
-// ═══════════════════════════════════════════════════════════════
-// TEAM MANAGEMENT TAB
-// ═══════════════════════════════════════════════════════════════
+// ─── Tab: GPS Map (legacy sessions) ──────────────────────────────────────────
 
-interface UserProfile {
-  id: string;
-  full_name: string;
-  role: string;
-  caller_id: string | null;
-  caller_name?: string | null;
-  email?: string;
+function GPSMapTab() {
+  const mapRef = useRef<HTMLDivElement>(null);
+  const mapInstanceRef = useRef<L.Map | null>(null);
+
+  useEffect(() => {
+    if (!mapRef.current || mapInstanceRef.current) return;
+    const map = L.map(mapRef.current, { center: [19.076, 72.8777], zoom: 12, zoomControl: true });
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap contributors', maxZoom: 19,
+    }).addTo(map);
+    mapInstanceRef.current = map;
+    setTimeout(() => map.invalidateSize(), 200);
+  }, []);
+
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ padding: '12px 20px', borderBottom: '1px solid #E2E8F0', fontSize: 13, color: '#6B7280' }}>
+        GPS route map — select an officer from the Visit Dashboard to see their location pins.
+      </div>
+      <div ref={mapRef} style={{ flex: 1, minHeight: 400 }} />
+    </div>
+  );
 }
 
-function TeamManagementTab({ apiUrls }: { apiUrls: string[] }) {
+// ─── Tab: Daily Travel Report ─────────────────────────────────────────────────
+
+function ReportTab({ token }: { token: string }) {
+  const [date, setDate] = useState(todayIST());
+  const [data, setData] = useState<OfficerTimeline[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    const res = await apiFetch(`/visits/admin/timeline?date=${date}`, token);
+    if (Array.isArray(res)) setData(res);
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, [date, token]);
+
+  const exportCSV = () => {
+    const rows = ['Officer,Email,Customer,Check-In,Check-Out,Duration (min),Notes'];
+    for (const o of data) {
+      for (const v of o.visits) {
+        rows.push([
+          `"${o.name}"`, `"${o.email}"`,
+          `"${v.customers?.name || ''}"`,
+          v.checked_in_at, v.checked_out_at || '',
+          v.duration_minutes ?? '', `"${v.notes || ''}"`,
+        ].join(','));
+      }
+    }
+    const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `visit-report-${date}.csv`; a.click();
+  };
+
+  return (
+    <div style={{ padding: 24, maxWidth: 1000, margin: '0 auto' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 10 }}>
+        <div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: '#111827' }}>Daily Travel & Visit Report</div>
+          <div style={{ fontSize: 13, color: '#6B7280', marginTop: 2 }}>Consolidated officer visit report by date</div>
+        </div>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <input type="date" value={date} onChange={e => setDate(e.target.value)} style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: '6px 10px', fontSize: 13 }} />
+          <button onClick={load} disabled={loading} style={{ background: '#2563EB', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <RefreshCw size={13} /> {loading ? 'Loading…' : 'Load'}
+          </button>
+          <button onClick={exportCSV} disabled={data.length === 0} style={{ background: '#10B981', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Download size={13} /> Export CSV
+          </button>
+        </div>
+      </div>
+
+      {data.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: 60, color: '#9CA3AF' }}>
+          {token ? 'No visit data for this date.' : 'Set admin token above to load data.'}
+        </div>
+      ) : (
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <thead>
+            <tr style={{ background: '#F8FAFC', borderBottom: '2px solid #E2E8F0' }}>
+              {['Officer', 'Customer', 'Check-In', 'Check-Out', 'Duration', 'Status', 'Notes'].map(h => (
+                <th key={h} style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 700, color: '#374151', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.03em' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {data.flatMap(o =>
+              o.visits.map((v, i) => (
+                <tr key={v.id} style={{ borderBottom: '1px solid #F1F5F9', background: i % 2 === 0 ? '#fff' : '#FAFAFA' }}>
+                  <td style={{ padding: '10px 12px', fontWeight: 600, color: '#111827' }}>{i === 0 ? o.name || o.email : ''}</td>
+                  <td style={{ padding: '10px 12px', color: '#374151' }}>{v.customers?.name || '—'}</td>
+                  <td style={{ padding: '10px 12px', color: '#374151' }}>{fmtTime(v.checked_in_at)}</td>
+                  <td style={{ padding: '10px 12px', color: '#374151' }}>{fmtTime(v.checked_out_at)}</td>
+                  <td style={{ padding: '10px 12px', color: '#2563EB', fontWeight: 600 }}>{fmtDur(v.duration_minutes)}</td>
+                  <td style={{ padding: '10px 12px' }}>
+                    <span style={{ background: v.checked_out_at ? '#ECFDF5' : '#FEF3C7', color: v.checked_out_at ? '#059669' : '#D97706', borderRadius: 6, padding: '2px 8px', fontSize: 11, fontWeight: 700 }}>
+                      {v.checked_out_at ? 'Done' : 'In Progress'}
+                    </span>
+                  </td>
+                  <td style={{ padding: '10px 12px', color: '#6B7280', fontStyle: 'italic' }}>{v.notes || '—'}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+// ─── Tab: Team Management ─────────────────────────────────────────────────────
+
+function TeamManagementTab({ token }: { token: string }) {
   const [users, setUsers] = React.useState<UserProfile[]>([]);
   const [callers, setCallers] = React.useState<UserProfile[]>([]);
+  const [fieldOfficers, setFieldOfficers] = React.useState<UserProfile[]>([]);
   const [isLoading, setIsLoading] = React.useState(false);
   const [assignState, setAssignState] = React.useState<Record<string, string>>({});
   const [saving, setSaving] = React.useState<string | null>(null);
-  const [message, setMessage] = React.useState<string | null>(null);
+  const [message, setMessage] = React.useState('');
+  const [roleChanges, setRoleChanges] = React.useState<Record<string, string>>({});
 
-  const load = async () => {
+  const load = React.useCallback(async () => {
+    if (!token) return;
     setIsLoading(true);
-    for (const base of apiUrls) {
-      try {
-        const [usersRes, callersRes] = await Promise.all([
-          fetch(`${base}/admin/all-users`),
-          fetch(`${base}/admin/callers`),
-        ]);
-        if (usersRes.ok && callersRes.ok) {
-          setUsers(await usersRes.json());
-          setCallers(await callersRes.json());
-          break;
-        }
-      } catch {}
-    }
+    const [usersRes, callersRes, fosRes] = await Promise.all([
+      apiFetch('/admin/all-users', token),
+      apiFetch('/admin/callers', token),
+      apiFetch('/admin/field-officers', token),
+    ]);
+    if (Array.isArray(usersRes)) setUsers(usersRes);
+    if (Array.isArray(callersRes)) setCallers(callersRes);
+    if (Array.isArray(fosRes)) setFieldOfficers(fosRes);
     setIsLoading(false);
-  };
+  }, [token]);
 
-  React.useEffect(() => { load(); }, []);
-
-  const fieldOfficers = users.filter(u => u.role === 'field_officer');
+  useEffect(() => { load(); }, [load]);
 
   const handleAssign = async (officerId: string) => {
     const callerId = assignState[officerId];
     if (!callerId) return;
     setSaving(officerId);
-    for (const base of apiUrls) {
-      try {
-        const res = await fetch(`${base}/admin/profiles/assign`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ field_officer_id: officerId, caller_id: callerId }),
-        });
-        if (res.ok) {
-          setMessage('Assignment saved successfully.');
-          await load();
-          break;
-        }
-      } catch {}
+    const res = await apiPost('/admin/profiles/assign', { field_officer_id: officerId, caller_id: callerId }, token);
+    if (res?.success) {
+      setMessage(`✅ Assignment saved!`);
+      await load();
+    } else {
+      setMessage('❌ Assignment failed. Check token/permissions.');
     }
     setSaving(null);
-    setTimeout(() => setMessage(null), 3000);
+    setTimeout(() => setMessage(''), 3000);
   };
 
-  const handleRoleChange = async (userId: string, newRole: string) => {
-    for (const base of apiUrls) {
-      try {
-        const res = await fetch(`${base}/admin/profiles/${userId}/role`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ role: newRole }),
-        });
-        if (res.ok) { await load(); break; }
-      } catch {}
+  const handleRoleChange = async (userId: string) => {
+    const role = roleChanges[userId];
+    if (!role) return;
+    setSaving(userId + '_role');
+    const res = await apiPut(`/admin/profiles/${userId}/role`, { role }, token);
+    if (res?.success) {
+      setMessage(`✅ Role updated to ${role}!`);
+      await load();
+    } else {
+      setMessage('❌ Role update failed. Check token/permissions.');
     }
+    setSaving(null);
+    setTimeout(() => setMessage(''), 3000);
   };
+
+  if (!token) return (
+    <div style={{ padding: 40, textAlign: 'center', color: '#9CA3AF', fontSize: 15 }}>
+      <Shield size={40} color="#D1D5DB" style={{ marginBottom: 12 }} />
+      <div>Set the admin JWT token above to manage team assignments.</div>
+    </div>
+  );
 
   return (
-    <div style={{ padding: 24, maxWidth: 900, margin: '0 auto' }}>
-      <div style={{ marginBottom: 20, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+    <div style={{ padding: 24, maxWidth: 1000, margin: '0 auto' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
         <div>
           <div style={{ fontSize: 20, fontWeight: 800, color: '#111827' }}>Team Management</div>
           <div style={{ fontSize: 13, color: '#6B7280', marginTop: 2 }}>Assign field officers to callers · Manage roles</div>
         </div>
-        {message && (
-          <div style={{ background: '#ECFDF5', color: '#10B981', borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 600 }}>
-            ✓ {message}
-          </div>
-        )}
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          {message && <div style={{ background: message.startsWith('✅') ? '#ECFDF5' : '#FEF2F2', color: message.startsWith('✅') ? '#059669' : '#DC2626', borderRadius: 8, padding: '8px 14px', fontSize: 13 }}>{message}</div>}
+          <button onClick={load} disabled={isLoading} style={{ background: '#2563EB', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <RefreshCw size={13} /> {isLoading ? 'Loading…' : 'Refresh'}
+          </button>
+        </div>
       </div>
 
       {isLoading ? (
@@ -437,727 +579,113 @@ function TeamManagementTab({ apiUrls }: { apiUrls: string[] }) {
       ) : (
         <>
           {/* Callers section */}
-          <div style={{ marginBottom: 24 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#374151', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          <div style={{ marginBottom: 28 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              <Phone size={13} style={{ display: 'inline', marginRight: 6, verticalAlign: 'middle' }} />
               Callers ({callers.length})
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+              {callers.length === 0 && <div style={{ color: '#9CA3AF', fontSize: 13 }}>No callers found. Change a user's role to "caller" below.</div>}
               {callers.map(c => (
-                <div key={c.id} style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 10, padding: '10px 14px' }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: '#1D4ED8' }}>{c.full_name}</div>
-                  <div style={{ fontSize: 11, color: '#6B7280' }}>{c.email}</div>
-                  <div style={{ fontSize: 11, color: '#60A5FA', marginTop: 4 }}>
+                <div key={c.id} style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 10, padding: '10px 14px', minWidth: 200 }}>
+                  <div style={{ fontWeight: 700, color: '#1E40AF', fontSize: 14 }}>{c.full_name || c.email}</div>
+                  <div style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>{c.email}</div>
+                  <div style={{ fontSize: 12, color: '#2563EB', marginTop: 4, fontWeight: 600 }}>
                     {fieldOfficers.filter(f => f.caller_id === c.id).length} officers assigned
                   </div>
                 </div>
               ))}
-              {callers.length === 0 && (
-                <div style={{ color: '#9CA3AF', fontSize: 13 }}>No callers yet. Change a user's role to "caller" below.</div>
-              )}
             </div>
           </div>
 
-          {/* Field officers table */}
+          {/* Field Officers section */}
+          <div style={{ marginBottom: 28 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              <UserCheck size={13} style={{ display: 'inline', marginRight: 6, verticalAlign: 'middle' }} />
+              Field Officers ({fieldOfficers.length}) — Assign to Caller
+            </div>
+            {fieldOfficers.length === 0 && <div style={{ color: '#9CA3AF', fontSize: 13 }}>No field officers found.</div>}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {fieldOfficers.map(fo => (
+                <div key={fo.id} style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 12, padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                  <div style={{ flex: 1, minWidth: 180 }}>
+                    <div style={{ fontWeight: 700, color: '#111827', fontSize: 14 }}>{fo.full_name || fo.email}</div>
+                    <div style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>{fo.email}</div>
+                    {fo.caller_name && (
+                      <div style={{ fontSize: 12, color: '#10B981', marginTop: 3, fontWeight: 600 }}>
+                        ✓ Assigned to: {fo.caller_name}
+                      </div>
+                    )}
+                    {!fo.caller_id && (
+                      <div style={{ fontSize: 12, color: '#F59E0B', marginTop: 3 }}>⚠ Unassigned</div>
+                    )}
+                  </div>
+                  <select
+                    value={assignState[fo.id] ?? fo.caller_id ?? ''}
+                    onChange={e => setAssignState(s => ({ ...s, [fo.id]: e.target.value }))}
+                    style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: '6px 10px', fontSize: 13, minWidth: 180 }}
+                  >
+                    <option value="">— Select Caller —</option>
+                    {callers.map(c => (
+                      <option key={c.id} value={c.id}>{c.full_name || c.email}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => handleAssign(fo.id)}
+                    disabled={saving === fo.id || !assignState[fo.id]}
+                    style={{ background: '#2563EB', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', cursor: 'pointer', fontSize: 13, opacity: saving === fo.id || !assignState[fo.id] ? 0.5 : 1 }}
+                  >
+                    {saving === fo.id ? 'Saving…' : 'Assign'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* All users — role management */}
           <div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#374151', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Field Officers ({fieldOfficers.length})
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              <User size={13} style={{ display: 'inline', marginRight: 6, verticalAlign: 'middle' }} />
+              All Users ({users.length}) — Manage Roles
             </div>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
-                <tr style={{ borderBottom: '2px solid #E5E7EB' }}>
-                  <th style={{ textAlign: 'left', padding: '8px 12px', color: '#6B7280', fontWeight: 600 }}>Name / Email</th>
-                  <th style={{ textAlign: 'left', padding: '8px 12px', color: '#6B7280', fontWeight: 600 }}>Assigned Caller</th>
-                  <th style={{ textAlign: 'left', padding: '8px 12px', color: '#6B7280', fontWeight: 600 }}>Change Assignment</th>
-                  <th style={{ textAlign: 'left', padding: '8px 12px', color: '#6B7280', fontWeight: 600 }}>Role</th>
+                <tr style={{ background: '#F8FAFC', borderBottom: '2px solid #E2E8F0' }}>
+                  {['Name', 'Email', 'Current Role', 'Change Role', ''].map(h => (
+                    <th key={h} style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 700, color: '#374151', fontSize: 12, textTransform: 'uppercase' }}>{h}</th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
-                {fieldOfficers.map(fo => (
-                  <tr key={fo.id} style={{ borderBottom: '1px solid #F3F4F6' }}>
+                {users.map((u, i) => (
+                  <tr key={u.id} style={{ borderBottom: '1px solid #F1F5F9', background: i % 2 === 0 ? '#fff' : '#FAFAFA' }}>
+                    <td style={{ padding: '10px 12px', fontWeight: 600 }}>{u.full_name || '—'}</td>
+                    <td style={{ padding: '10px 12px', color: '#6B7280' }}>{u.email || u.id}</td>
                     <td style={{ padding: '10px 12px' }}>
-                      <div style={{ fontWeight: 600, color: '#111827' }}>{fo.full_name}</div>
-                      <div style={{ fontSize: 11, color: '#9CA3AF' }}>{fo.email}</div>
-                    </td>
-                    <td style={{ padding: '10px 12px' }}>
-                      {fo.caller_id
-                        ? <span style={{ color: '#2563EB', fontWeight: 600 }}>{callers.find(c => c.id === fo.caller_id)?.full_name || fo.caller_id.slice(0, 8)}</span>
-                        : <span style={{ color: '#F59E0B', fontSize: 11 }}>Unassigned</span>
-                      }
-                    </td>
-                    <td style={{ padding: '10px 12px' }}>
-                      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                        <select
-                          value={assignState[fo.id] || fo.caller_id || ''}
-                          onChange={e => setAssignState(s => ({ ...s, [fo.id]: e.target.value }))}
-                          style={{ fontSize: 12, padding: '4px 8px', border: '1px solid #E5E7EB', borderRadius: 6 }}
-                        >
-                          <option value="">— select caller —</option>
-                          {callers.map(c => <option key={c.id} value={c.id}>{c.full_name}</option>)}
-                        </select>
-                        <button
-                          onClick={() => handleAssign(fo.id)}
-                          disabled={saving === fo.id || !assignState[fo.id]}
-                          style={{ fontSize: 11, padding: '4px 10px', background: '#2563EB', color: '#FFF', border: 'none', borderRadius: 6, cursor: 'pointer', opacity: (!assignState[fo.id] || saving === fo.id) ? 0.5 : 1 }}
-                        >
-                          {saving === fo.id ? '…' : 'Save'}
-                        </button>
-                      </div>
+                      <span style={{
+                        background: u.role === 'admin' ? '#FEE2E2' : u.role === 'caller' ? '#EFF6FF' : '#F0FDF4',
+                        color: u.role === 'admin' ? '#DC2626' : u.role === 'caller' ? '#2563EB' : '#16A34A',
+                        borderRadius: 6, padding: '3px 10px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase',
+                      }}>{u.role}</span>
                     </td>
                     <td style={{ padding: '10px 12px' }}>
                       <select
-                        value={fo.role}
-                        onChange={e => handleRoleChange(fo.id, e.target.value)}
-                        style={{ fontSize: 12, padding: '4px 8px', border: '1px solid #E5E7EB', borderRadius: 6 }}
+                        value={roleChanges[u.id] ?? u.role}
+                        onChange={e => setRoleChanges(s => ({ ...s, [u.id]: e.target.value }))}
+                        style={{ border: '1px solid #E2E8F0', borderRadius: 6, padding: '5px 8px', fontSize: 12 }}
                       >
                         <option value="field_officer">Field Officer</option>
                         <option value="caller">Caller</option>
                         <option value="admin">Admin</option>
                       </select>
                     </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          {/* All users role summary */}
-          <div style={{ marginTop: 32 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#374151', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              All Users
-            </div>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              {users.map(u => (
-                <div key={u.id} style={{ background: '#F9FAFB', border: '1px solid #E5E7EB', borderRadius: 8, padding: '8px 12px', fontSize: 12 }}>
-                  <span style={{ fontWeight: 600 }}>{u.full_name}</span>
-                  <span style={{ marginLeft: 6, padding: '2px 6px', borderRadius: 4, fontSize: 10, background: u.role === 'admin' ? '#FEF3C7' : u.role === 'caller' ? '#EFF6FF' : '#F3F4F6', color: u.role === 'admin' ? '#92400E' : u.role === 'caller' ? '#1D4ED8' : '#374151' }}>
-                    {u.role}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-export default function App() {
-  const [activeTab, setActiveTab] = useState<'map' | 'report' | 'visits' | 'team'>('map');
-  const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
-  const [officers, setOfficers] = useState<FieldOfficer[]>([]);
-  const [filteredOfficers, setFilteredOfficers] = useState<FieldOfficer[]>([]);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedOfficer, setSelectedOfficer] = useState<FieldOfficer | null>(null);
-  const [officerSessions, setOfficerSessions] = useState<OfficerSession[]>([]);
-  const [selectedSessionId, setSelectedSessionId] = useState<string>('all');
-  const [routePoints, setRoutePoints] = useState<RoutePoint[]>([]);
-  const [routeDistanceKm, setRouteDistanceKm] = useState<number>(0);
-  const [overview, setOverview] = useState<OverviewStats>({
-    total_officers: 0,
-    active_officers_today: 0,
-    total_distance_km_today: 0,
-    total_distance_km_all_time: 0,
-    total_sessions_today: 0,
-    report_date: new Date().toISOString().split('T')[0],
-  });
-  const [loading, setLoading] = useState(false);
-
-  const mapInstanceRef = useRef<L.Map | null>(null);
-  const polylineRef = useRef<L.Polyline | null>(null);
-  const markersRef = useRef<L.Marker[]>([]);
-
-  // 1. Fetch Overview & Officers
-  const fetchData = async () => {
-    setLoading(true);
-    try {
-      const [overRes, offRes] = await Promise.all([
-        apiFetch('/admin/overview'),
-        apiFetch(`/admin/officers?filter_date=${selectedDate}`),
-      ]);
-
-      if (overRes && !overRes.detail) {
-        setOverview(overRes);
-      } else {
-        setOverview({
-          total_officers: MOCK_OFFICERS.length,
-          active_officers_today: MOCK_OFFICERS.filter((o) => o.status === 'active').length,
-          total_distance_km_today: MOCK_OFFICERS.reduce((acc, o) => acc + o.today_distance_km, 0),
-          total_distance_km_all_time: MOCK_OFFICERS.reduce((acc, o) => acc + o.total_distance_km, 0),
-          total_sessions_today: 4,
-          report_date: selectedDate,
-        });
-      }
-
-      if (Array.isArray(offRes) && offRes.length > 0) {
-        setOfficers(offRes);
-        if (!selectedOfficer) {
-          setSelectedOfficer(offRes[0]);
-        }
-      } else {
-        setOfficers(MOCK_OFFICERS);
-        if (!selectedOfficer) {
-          setSelectedOfficer(MOCK_OFFICERS[0]);
-        }
-      }
-    } catch {
-      setOfficers(MOCK_OFFICERS);
-      if (!selectedOfficer) setSelectedOfficer(MOCK_OFFICERS[0]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchData();
-  }, [selectedDate]);
-
-  // Filter officers by search
-  useEffect(() => {
-    if (!searchQuery.trim()) {
-      setFilteredOfficers(officers);
-    } else {
-      const q = searchQuery.toLowerCase();
-      setFilteredOfficers(
-        officers.filter(
-          (o) =>
-            o.name.toLowerCase().includes(q) ||
-            o.email.toLowerCase().includes(q) ||
-            o.user_id.toLowerCase().includes(q)
-        )
-      );
-    }
-  }, [searchQuery, officers]);
-
-  // 2. Fetch sessions when an officer is selected
-  useEffect(() => {
-    if (!selectedOfficer) return;
-    (async () => {
-      try {
-        const data = await apiFetch(`/admin/officers/${selectedOfficer.user_id}/sessions`);
-        if (Array.isArray(data) && data.length > 0) {
-          setOfficerSessions(data);
-          setSelectedSessionId(data[0].id);
-        } else {
-          setOfficerSessions(MOCK_SESSIONS);
-          setSelectedSessionId(MOCK_SESSIONS[0].id);
-        }
-      } catch {
-        setOfficerSessions(MOCK_SESSIONS);
-        setSelectedSessionId(MOCK_SESSIONS[0].id);
-      }
-    })();
-  }, [selectedOfficer]);
-
-  // 3. Fetch Route Points for the selected session
-  useEffect(() => {
-    if (!selectedOfficer || !selectedSessionId) return;
-
-    (async () => {
-      try {
-        const data = await apiFetch(`/admin/sessions/${selectedSessionId}/route`);
-        if (data && Array.isArray(data.points) && data.points.length > 0) {
-          setRoutePoints(data.points);
-          setRouteDistanceKm(data.total_distance_km || 0);
-        } else {
-          const centerLat = selectedOfficer.last_location?.latitude || 19.076;
-          const centerLon = selectedOfficer.last_location?.longitude || 72.8777;
-          const pts = generateMockRoute(centerLat, centerLon);
-          setRoutePoints(pts);
-          const currentSess = officerSessions.find((s) => s.id === selectedSessionId);
-          setRouteDistanceKm(currentSess?.total_distance_km || 14.5);
-        }
-      } catch {
-        const centerLat = selectedOfficer.last_location?.latitude || 19.076;
-        const centerLon = selectedOfficer.last_location?.longitude || 72.8777;
-        const pts = generateMockRoute(centerLat, centerLon);
-        setRoutePoints(pts);
-        setRouteDistanceKm(14.5);
-      }
-    })();
-  }, [selectedSessionId, selectedOfficer]);
-
-  // 4. Initialize and Update Leaflet Map
-  useEffect(() => {
-    if (activeTab !== 'map') return;
-
-    const mapContainer = document.getElementById('leaflet-map');
-    if (!mapContainer) return;
-
-    if (!mapInstanceRef.current) {
-      const map = L.map(mapContainer, {
-        center: [19.076, 72.8777],
-        zoom: 13,
-        zoomControl: true,
-      });
-
-      // Standard OpenStreetMap tiles (100% free, no API key required)
-      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '© OpenStreetMap contributors',
-        maxZoom: 19,
-      }).addTo(map);
-
-      mapInstanceRef.current = map;
-    }
-
-    const map = mapInstanceRef.current;
-
-    // Clear previous polyline & markers
-    if (polylineRef.current) {
-      map.removeLayer(polylineRef.current);
-      polylineRef.current = null;
-    }
-    markersRef.current.forEach((m) => map.removeLayer(m));
-    markersRef.current = [];
-
-    // Draw route
-    if (routePoints.length >= 1) {
-      const latlngs: [number, number][] = routePoints.map((p) => [p.latitude, p.longitude]);
-
-      if (latlngs.length >= 2) {
-        const polyline = L.polyline(latlngs, {
-          color: '#6366f1',
-          weight: 4.5,
-          opacity: 0.95,
-          lineJoin: 'round',
-        }).addTo(map);
-        polylineRef.current = polyline;
-
-        map.fitBounds(polyline.getBounds(), { padding: [40, 40], maxZoom: 16 });
-      } else {
-        map.setView(latlngs[0], 15);
-      }
-
-      // Start Marker ('S')
-      const startPoint = routePoints[0];
-      const startIcon = L.divIcon({
-        className: 'custom-map-marker',
-        html: `<div style="background:#10b981; color:#fff; width:24px; height:24px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:11px; border:2px solid #09090b; box-shadow:0 2px 8px rgba(0,0,0,0.6);">S</div>`,
-        iconSize: [24, 24],
-        iconAnchor: [12, 12],
-      });
-      const startMarker = L.marker([startPoint.latitude, startPoint.longitude], { icon: startIcon })
-        .addTo(map)
-        .bindPopup(`<b>Start Point</b><br/>Time: ${new Date(startPoint.recorded_at).toLocaleTimeString()}`);
-      markersRef.current.push(startMarker);
-
-      // End Marker ('E')
-      if (routePoints.length >= 2) {
-        const endPoint = routePoints[routePoints.length - 1];
-        const isCurrentlyActive = selectedOfficer?.status === 'active';
-        const endColor = isCurrentlyActive ? '#6366f1' : '#f43f5e';
-        const endLabel = isCurrentlyActive ? '●' : 'E';
-
-        const endIcon = L.divIcon({
-          className: 'custom-map-marker',
-          html: `<div style="background:${endColor}; color:#fff; width:24px; height:24px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:12px; border:2px solid #09090b; box-shadow:0 2px 8px rgba(0,0,0,0.6);">${endLabel}</div>`,
-          iconSize: [24, 24],
-          iconAnchor: [12, 12],
-        });
-        const endMarker = L.marker([endPoint.latitude, endPoint.longitude], { icon: endIcon })
-          .addTo(map)
-          .bindPopup(
-            `<b>${isCurrentlyActive ? 'Latest Location' : 'End Point'}</b><br/>Time: ${new Date(
-              endPoint.recorded_at
-            ).toLocaleTimeString()}`
-          );
-        markersRef.current.push(endMarker);
-      }
-    }
-  }, [routePoints, activeTab, selectedOfficer]);
-
-  // Export Daily Summary Report to CSV
-  const handleExportCSV = () => {
-    const headers = ['Officer ID', 'Officer Name', 'Email', 'Today Distance (KM)', 'Total Distance (KM)', 'Sessions Today', 'Status', 'Last Active'];
-    const rows = officers.map((o) => [
-      o.user_id,
-      `"${o.name}"`,
-      o.email,
-      o.today_distance_km.toFixed(2),
-      o.total_distance_km.toFixed(2),
-      o.sessions_count_today,
-      o.status.toUpperCase(),
-      o.last_active_at ? new Date(o.last_active_at).toLocaleString() : 'N/A',
-    ]);
-
-    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `FSC_Daily_Route_Report_${selectedDate}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  const selectedSessionObj = officerSessions.find((s) => s.id === selectedSessionId);
-
-  return (
-    <div className="app-container">
-      {/* Sleek Compact Top Navbar */}
-      <header className="top-navbar">
-        <div className="brand-section">
-          <div className="brand-mark">
-            <Navigation size={16} strokeWidth={1.5} />
-          </div>
-          <div className="brand-title-wrap">
-            <span className="brand-title">FSC Daily Portal</span>
-            <span className="brand-divider">/</span>
-            <span className="brand-subtitle">Field Officer Location & Route Monitoring</span>
-          </div>
-        </div>
-
-        <div className="nav-actions">
-          <div className="control-input-wrap">
-            <Calendar size={13} strokeWidth={1.5} />
-            <input
-              type="date"
-              className="date-input"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-            />
-          </div>
-
-          <button className="btn-control" onClick={fetchData} title="Refresh live telemetry">
-            <RefreshCw size={13} strokeWidth={1.5} className={loading ? 'animate-spin' : ''} />
-            <span>Refresh</span>
-          </button>
-
-          <button className="btn-primary" onClick={handleExportCSV}>
-            <Download size={13} strokeWidth={1.5} />
-            <span>Export CSV</span>
-          </button>
-        </div>
-      </header>
-
-      {/* KPI Metric Cards */}
-      <section className="kpi-grid">
-        <div className="kpi-card">
-          <div className="kpi-header">
-            <span className="kpi-label">Field officers</span>
-            <div className="kpi-icon-box">
-              <Users size={15} strokeWidth={1.5} />
-            </div>
-          </div>
-          <div className="kpi-value-row">
-            <span className="kpi-value">{overview.total_officers}</span>
-          </div>
-          <div className="kpi-footer">
-            <span style={{ color: 'var(--text-secondary)' }}>
-              {overview.active_officers_today} active &mdash; {overview.total_officers} total
-            </span>
-          </div>
-        </div>
-
-        <div className="kpi-card">
-          <div className="kpi-header">
-            <span className="kpi-label">Today's distance</span>
-            <div className="kpi-icon-box">
-              <Route size={15} strokeWidth={1.5} />
-            </div>
-          </div>
-          <div className="kpi-value-row">
-            <span className="kpi-value">{overview.total_distance_km_today.toFixed(1)}</span>
-            <span className="kpi-unit">km</span>
-          </div>
-          <div className="kpi-footer">
-            <span>Cumulative field travel</span>
-          </div>
-        </div>
-
-        <div className="kpi-card">
-          <div className="kpi-header">
-            <span className="kpi-label">Recorded sessions</span>
-            <div className="kpi-icon-box">
-              <Clock size={15} strokeWidth={1.5} />
-            </div>
-          </div>
-          <div className="kpi-value-row">
-            <span className="kpi-value">{overview.total_sessions_today}</span>
-            <span className="kpi-unit">trips</span>
-          </div>
-          <div className="kpi-footer">
-            <span>Farmer visits & check-ins</span>
-          </div>
-        </div>
-
-        <div className="kpi-card">
-          <div className="kpi-header">
-            <span className="kpi-label">Avg distance / officer</span>
-            <div className="kpi-icon-box">
-              <Activity size={15} strokeWidth={1.5} />
-            </div>
-          </div>
-          <div className="kpi-value-row">
-            <span className="kpi-value">
-              {(
-                overview.total_distance_km_today / Math.max(1, overview.total_officers)
-              ).toFixed(1)}
-            </span>
-            <span className="kpi-unit">km</span>
-          </div>
-          <div className="kpi-footer">
-            <span>Team route coverage average</span>
-          </div>
-        </div>
-      </section>
-
-      {/* Navigation Tabs */}
-      <div className="tabs-navbar">
-        <button
-          className={`tab-item ${activeTab === 'map' ? 'active' : ''}`}
-          onClick={() => setActiveTab('map')}
-        >
-          <Route size={13} strokeWidth={1.5} />
-          <span>Interactive Route Map & Sessions</span>
-        </button>
-        <button
-          className={`tab-item ${activeTab === 'report' ? 'active' : ''}`}
-          onClick={() => setActiveTab('report')}
-        >
-          <FileSpreadsheet size={13} strokeWidth={1.5} />
-          <span>Daily Travel &amp; Allowance Report</span>
-        </button>
-        <button
-          className={`tab-item ${activeTab === 'visits' ? 'active' : ''}`}
-          onClick={() => setActiveTab('visits')}
-        >
-          <Navigation size={13} strokeWidth={1.5} />
-          <span>Visit Timeline</span>
-        </button>
-        <button
-          className={`tab-item ${activeTab === 'team' ? 'active' : ''}`}
-          onClick={() => setActiveTab('team')}
-        >
-          <Users size={13} strokeWidth={1.5} />
-          <span>Team Management</span>
-        </button>
-      </div>
-
-      {/* Tab 1: Master-Detail Split Workspace */}
-      {activeTab === 'map' && (
-        <div className="workspace-split">
-          {/* Left Panel: Field Officers Directory */}
-          <div className="officers-panel">
-            <div className="panel-toolbar">
-              <span className="panel-toolbar-title">
-                Field Officers
-                <span className="panel-toolbar-count">{filteredOfficers.length}</span>
-              </span>
-            </div>
-
-            <div className="search-container">
-              <div className="search-input-wrap">
-                <Search size={13} strokeWidth={1.5} style={{ color: 'var(--text-muted)' }} />
-                <input
-                  type="text"
-                  placeholder="Filter by officer name or ID..."
-                  className="search-input-field"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                />
-              </div>
-            </div>
-
-            <div className="officers-scroll">
-              {filteredOfficers.map((officer) => {
-                const isSelected = selectedOfficer?.user_id === officer.user_id;
-                return (
-                  <div
-                    key={officer.user_id}
-                    className={`officer-row ${isSelected ? 'selected' : ''}`}
-                    onClick={() => setSelectedOfficer(officer)}
-                  >
-                    <div className="officer-left">
-                      <div className="officer-avatar">
-                        {officer.name
-                          .split(' ')
-                          .map((n) => n[0])
-                          .join('')
-                          .substring(0, 2)
-                          .toUpperCase()}
-                      </div>
-                      <div className="officer-meta">
-                        <span className="officer-name">{officer.name}</span>
-                        <span className="officer-trips-sub">{officer.email}</span>
-                      </div>
-                    </div>
-
-                    <div className="officer-right">
-                      <span className="officer-distance-metric">
-                        {officer.today_distance_km.toFixed(1)} km
-                      </span>
-                      <span className={`status-pill ${officer.status}`}>
-                        {officer.status === 'active' ? 'On Route' : 'Idle'}
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
-
-              {filteredOfficers.length === 0 && (
-                <div className="empty-state">
-                  <Search size={20} strokeWidth={1.5} />
-                  <span>No field officers match "{searchQuery}"</span>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Right Panel: Map & Telemetry HUD */}
-          <div className="map-view-panel">
-            {/* Header Toolbar */}
-            <div className="map-toolbar">
-              <div className="map-officer-info">
-                <span className="map-officer-title">
-                  {selectedOfficer ? selectedOfficer.name : 'Select an Officer'}
-                </span>
-                {selectedOfficer && (
-                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                    {selectedOfficer.email}
-                  </span>
-                )}
-              </div>
-
-              {/* Session Dropdown */}
-              <div className="map-controls-group">
-                <Layers size={13} strokeWidth={1.5} style={{ color: 'var(--text-secondary)' }} />
-                <select
-                  className="session-select"
-                  value={selectedSessionId}
-                  onChange={(e) => setSelectedSessionId(e.target.value)}
-                >
-                  {officerSessions.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.session_label} — {s.total_distance_km.toFixed(1)} km (
-                      {s.started_at
-                        ? new Date(s.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                        : 'Start'}
-                      {s.ended_at
-                        ? ` - ${new Date(s.ended_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
-                        : ' - Active'}
-                      )
-                    </option>
-                  ))}
-                  {officerSessions.length === 0 && <option value="none">No recorded sessions</option>}
-                </select>
-              </div>
-            </div>
-
-            {/* Map Container */}
-            <div className="leaflet-map-wrapper">
-              <div id="leaflet-map" />
-
-              {/* Floating Glassmorphic Telemetry HUD */}
-              <div className="telemetry-hud">
-                <div className="hud-metric">
-                  <span className="hud-metric-label">Session distance</span>
-                  <span className="hud-metric-value">{routeDistanceKm.toFixed(2)} km</span>
-                </div>
-
-                <div className="hud-divider" />
-
-                <div className="hud-metric">
-                  <span className="hud-metric-label">GPS points</span>
-                  <span className="hud-metric-value">{routePoints.length}</span>
-                </div>
-
-                {selectedSessionObj && (
-                  <>
-                    <div className="hud-divider" />
-                    <div className="hud-metric">
-                      <span className="hud-metric-label">Status</span>
-                      <span
-                        className="hud-metric-value"
-                        style={{
-                          color:
-                            selectedSessionObj.status === 'active'
-                              ? 'var(--emerald-accent)'
-                              : 'var(--text-secondary)',
-                          fontSize: '12px',
-                        }}
-                      >
-                        {selectedSessionObj.status.toUpperCase()}
-                      </span>
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Tab 2: Daily Travel & Allowance Report Table */}
-      {activeTab === 'report' && (
-        <div className="report-view-container">
-          <div className="report-card">
-            <div className="panel-toolbar">
-              <div>
-                <span className="panel-toolbar-title">FSC Daily Field Travel Report — {selectedDate}</span>
-              </div>
-              <button className="btn-primary" onClick={handleExportCSV}>
-                <Download size={13} strokeWidth={1.5} />
-                <span>Export CSV</span>
-              </button>
-            </div>
-
-            <table className="report-table">
-              <thead>
-                <tr>
-                  <th>Officer Name</th>
-                  <th>Officer ID</th>
-                  <th>Today Distance</th>
-                  <th>Sessions</th>
-                  <th>Last Recorded Time</th>
-                  <th>Status</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {officers.map((off) => (
-                  <tr key={off.user_id}>
-                    <td>
-                      <div style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{off.name}</div>
-                      <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{off.email}</div>
-                    </td>
-                    <td>
-                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-                        {off.email}
-                      </span>
-                    </td>
-                    <td>
-                      <span
-                        style={{
-                          fontFamily: 'var(--font-mono)',
-                          fontWeight: 600,
-                          color: off.today_distance_km > 0 ? 'var(--text-primary)' : 'var(--text-muted)',
-                        }}
-                      >
-                        {off.today_distance_km.toFixed(2)} km
-                      </span>
-                    </td>
-                    <td style={{ color: 'var(--text-secondary)' }}>{off.sessions_count_today} trips</td>
-                    <td style={{ color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>
-                      {off.last_active_at ? new Date(off.last_active_at).toLocaleTimeString() : '—'}
-                    </td>
-                    <td>
-                      <span className={`status-pill ${off.status}`}>
-                        {off.status === 'active' && <span className="pulse-dot" />}
-                        {off.status === 'active' ? 'On Route' : 'Idle'}
-                      </span>
-                    </td>
-                    <td>
+                    <td style={{ padding: '10px 12px' }}>
                       <button
-                        className="btn-control"
-                        style={{ height: '26px', padding: '0 8px', fontSize: '11px' }}
-                        onClick={() => {
-                          setSelectedOfficer(off);
-                          setActiveTab('map');
-                        }}
+                        onClick={() => handleRoleChange(u.id)}
+                        disabled={saving === u.id + '_role' || roleChanges[u.id] === u.role || !roleChanges[u.id]}
+                        style={{ background: '#10B981', color: '#fff', border: 'none', borderRadius: 6, padding: '5px 12px', cursor: 'pointer', fontSize: 12, opacity: (saving === u.id + '_role' || roleChanges[u.id] === u.role || !roleChanges[u.id]) ? 0.4 : 1 }}
                       >
-                        <span>View Route</span>
-                        <ChevronRight size={12} strokeWidth={1.5} />
+                        {saving === u.id + '_role' ? '…' : 'Save'}
                       </button>
                     </td>
                   </tr>
@@ -1165,18 +693,86 @@ export default function App() {
               </tbody>
             </table>
           </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── Root App ─────────────────────────────────────────────────────────────────
+
+type Tab = 'dashboard' | 'map' | 'report' | 'team';
+
+export default function App() {
+  const [activeTab, setActiveTab] = useState<Tab>('dashboard');
+  const [selectedDate, setSelectedDate] = useState(todayIST());
+  const [adminToken, setAdminToken] = useState('');
+
+  // Overview stats (from visit dashboard data)
+  const [overviewDate] = useState(todayIST());
+
+  const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
+    { id: 'dashboard', label: 'Visit Dashboard', icon: <Activity size={15} /> },
+    { id: 'map', label: 'GPS Map', icon: <MapPin size={15} /> },
+    { id: 'report', label: 'Daily Report', icon: <FileSpreadsheet size={15} /> },
+    { id: 'team', label: 'Team Management', icon: <Users size={15} /> },
+  ];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', background: '#F8FAFC' }}>
+      {/* Top nav */}
+      <div style={{ background: '#0F172A', padding: '0 20px', display: 'flex', alignItems: 'center', gap: 16, height: 54, flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ width: 28, height: 28, background: '#2563EB', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Navigation size={14} color="#fff" />
+          </div>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 800, color: '#fff', letterSpacing: '0.02em' }}>FSC Daily Portal</div>
+            <div style={{ fontSize: 10, color: '#94A3B8' }}>Field Officer Management</div>
+          </div>
         </div>
-      )}
 
-      {/* Tab 3: Visit Timeline */}
-      {activeTab === 'visits' && (
-        <VisitTimelineTab apiUrls={API_URLS} officers={officers} />
-      )}
+        {/* Tab nav */}
+        <div style={{ display: 'flex', gap: 2, marginLeft: 20 }}>
+          {tabs.map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              style={{
+                background: activeTab === tab.id ? '#1E293B' : 'transparent',
+                color: activeTab === tab.id ? '#fff' : '#94A3B8',
+                border: 'none',
+                borderRadius: 8,
+                padding: '6px 14px',
+                cursor: 'pointer',
+                fontSize: 13,
+                fontWeight: activeTab === tab.id ? 700 : 400,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              {tab.icon} {tab.label}
+            </button>
+          ))}
+        </div>
 
-      {/* Tab 4: Team Management */}
-      {activeTab === 'team' && (
-        <TeamManagementTab apiUrls={API_URLS} />
-      )}
+        {/* Date */}
+        <div style={{ marginLeft: 'auto', fontSize: 12, color: '#64748B' }}>
+          📅 {new Date().toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
+        </div>
+      </div>
+
+      {/* Token banner */}
+      <TokenBanner token={adminToken} onSet={setAdminToken} />
+
+      {/* Tab content */}
+      <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        {activeTab === 'dashboard' && <VisitDashboardTab token={adminToken} />}
+        {activeTab === 'map' && <GPSMapTab />}
+        {activeTab === 'report' && <ReportTab token={adminToken} />}
+        {activeTab === 'team' && <TeamManagementTab token={adminToken} />}
+      </div>
     </div>
   );
 }
