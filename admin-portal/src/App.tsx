@@ -23,6 +23,7 @@ import {
   Phone,
   User,
 } from 'lucide-react';
+import { exportAdminVisitPDF } from './utils/pdfExport';
 import './index.css';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -239,6 +240,9 @@ function VisitDashboardTab({ token }: { token: string }) {
           <button onClick={load} disabled={loading} style={{ background: '#2563EB', color: '#fff', border: 'none', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
             <RefreshCw size={13} /> {loading ? 'Loading…' : 'Refresh'}
           </button>
+          <button onClick={() => exportAdminVisitPDF(timeline, date)} disabled={timeline.length === 0} style={{ background: '#10B981', color: '#fff', border: 'none', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+            <Download size={13} /> Export PDF
+          </button>
         </div>
       </div>
 
@@ -452,6 +456,9 @@ function ReportTab({ token }: { token: string }) {
           </button>
           <button onClick={exportCSV} disabled={data.length === 0} style={{ background: '#10B981', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
             <Download size={13} /> Export CSV
+          </button>
+          <button onClick={() => exportAdminVisitPDF(data, date)} disabled={data.length === 0} style={{ background: '#2563EB', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Download size={13} /> Export PDF
           </button>
         </div>
       </div>

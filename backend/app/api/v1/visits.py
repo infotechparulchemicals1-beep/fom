@@ -1,9 +1,12 @@
 from datetime import datetime, timezone, timedelta
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+import json
+import uuid
+from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File
 from pydantic import BaseModel
 from app.db.supabase_client import get_supabase
 from app.auth.dependencies import get_current_user
+from app.config import settings
 
 router = APIRouter(prefix="/visits", tags=["visits"])
 
@@ -45,6 +48,7 @@ class CheckoutRequest(BaseModel):
     # Allow mobile to pass exact checkout time (offline sync)
     checked_out_at: Optional[str] = None
     duration_minutes: Optional[int] = None
+    photo_urls: Optional[list[str]] = None
 
 
 @router.post("/checkin", status_code=status.HTTP_201_CREATED)
@@ -116,6 +120,8 @@ async def checkout(body: CheckoutRequest, current_user: dict = Depends(get_curre
             updates["checkout_lat"] = body.checkout_lat
         if body.checkout_lng is not None:
             updates["checkout_lng"] = body.checkout_lng
+        if body.photo_urls is not None:
+            updates["photo_urls"] = body.photo_urls
 
         res = (
             sb.table("customer_visits")
@@ -130,6 +136,56 @@ async def checkout(body: CheckoutRequest, current_user: dict = Depends(get_curre
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Checkout failed: {exc}") from exc
+
+
+
+@router.post("/{visit_id}/photos", status_code=status.HTTP_201_CREATED)
+async def upload_visit_photo(
+    visit_id: str,
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+):
+    """Upload a photo taken during a customer visit to Supabase Storage 'visit-images'."""
+    sb = get_supabase()
+    file_bytes = await file.read()
+    orig_name = file.filename or "photo.jpg"
+    ext = orig_name.split(".")[-1] if "." in orig_name else "jpg"
+    safe_ext = ext.lower() if ext.lower() in ["jpg", "jpeg", "png", "webp"] else "jpg"
+    filename = f"{uuid.uuid4().hex[:10]}.{safe_ext}"
+    user_id = current_user["user_id"]
+    path = f"{user_id}/{visit_id}/{filename}"
+
+    content_type = file.content_type or "image/jpeg"
+    try:
+        sb.storage.from_("visit-images").upload(
+            path,
+            file_bytes,
+            {"content-type": content_type, "upsert": "true"}
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to upload image to storage: {exc}") from exc
+
+    public_url = f"{settings.supabase_url}/storage/v1/object/public/visit-images/{path}"
+
+    # Safely append to photo_urls in customer_visits if column exists
+    try:
+        existing_res = sb.table("customer_visits").select("photo_urls").eq("id", visit_id).execute()
+        current_urls = []
+        if existing_res.data and existing_res.data[0].get("photo_urls"):
+            val = existing_res.data[0]["photo_urls"]
+            if isinstance(val, list):
+                current_urls = list(val)
+            elif isinstance(val, str):
+                try:
+                    current_urls = json.loads(val)
+                except Exception:
+                    current_urls = [val]
+        current_urls.append(public_url)
+        sb.table("customer_visits").update({"photo_urls": current_urls}).eq("id", visit_id).execute()
+    except Exception as update_err:
+        print(f"[Notice] photo_urls column update skipped: {update_err}")
+
+    return {"public_url": public_url, "path": path}
 
 
 @router.get("/today")
