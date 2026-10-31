@@ -11,7 +11,7 @@ from typing import Optional
 from datetime import datetime, timedelta
 import jwt
 from app.config import settings
-from app.db.supabase_client import get_supabase_client
+from app.db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/manager/auth", tags=["Manager Auth"])
 
@@ -98,7 +98,7 @@ async def validate_manager(request: ManagerAuthRequest):
         )
     
     try:
-        supabase = get_supabase_client()
+        supabase = get_supabase()
         
         # Query user by email
         response = supabase.table("users").select("*").eq("email", request.email).execute()
@@ -178,3 +178,4 @@ async def refresh_token(manager: dict = Depends(get_current_manager)):
         "token": new_token,
         "expires_in": 28800  # 8 hours in seconds
     }
+

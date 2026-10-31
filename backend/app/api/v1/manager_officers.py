@@ -10,7 +10,7 @@ from pydantic import BaseModel, EmailStr
 from typing import List, Optional
 from datetime import datetime
 from app.api.v1.manager_auth import get_current_manager
-from app.db.supabase_client import get_supabase_client
+from app.db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/manager/officers", tags=["Manager Officers"])
 
@@ -72,7 +72,7 @@ async def list_field_officers(
     """
     
     try:
-        supabase = get_supabase_client()
+        supabase = get_supabase()
         
         # Build query
         query = supabase.table("users")\
@@ -173,7 +173,7 @@ async def assign_officers(
     
     try:
         # Validate all officers exist
-        supabase = get_supabase_client()
+        supabase = get_supabase()
         
         officers_response = supabase.table("users")\
             .select("email")\
@@ -232,7 +232,7 @@ async def set_monthly_target(
     """
     
     try:
-        supabase = get_supabase_client()
+        supabase = get_supabase()
         
         # Get user ID from email
         user_response = supabase.table("users")\
@@ -339,7 +339,7 @@ async def get_target_and_achievement(
     """
     
     try:
-        supabase = get_supabase_client()
+        supabase = get_supabase()
         
         # Get user ID
         user_response = supabase.table("users")\
@@ -421,3 +421,4 @@ async def get_target_and_achievement(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Target achievement error: {str(e)}")
+

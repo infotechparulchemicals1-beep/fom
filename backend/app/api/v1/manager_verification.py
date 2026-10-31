@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
 from app.api.v1.manager_auth import get_current_manager
-from app.db.supabase_client import get_supabase_client
+from app.db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/manager/verification", tags=["Manager Verification"])
 
@@ -77,7 +77,7 @@ async def get_pending_verifications(
     """
     
     try:
-        supabase = get_supabase_client()
+        supabase = get_supabase()
         
         # Build query
         query = supabase.table("customer_visits")\
@@ -170,7 +170,7 @@ async def verify_visit(
     """
     
     try:
-        supabase = get_supabase_client()
+        supabase = get_supabase()
         
         # Verify visit exists
         visit_response = supabase.table("customer_visits")\
@@ -254,7 +254,7 @@ async def get_visit_details(
     """
     
     try:
-        supabase = get_supabase_client()
+        supabase = get_supabase()
         
         # Get visit with joins
         visit_response = supabase.table("customer_visits")\
@@ -339,7 +339,7 @@ async def get_verification_summary(
     """
     
     try:
-        supabase = get_supabase_client()
+        supabase = get_supabase()
         
         # Get date range
         month_start = f"{month_year}-01T00:00:00"
@@ -391,3 +391,4 @@ async def get_verification_summary(
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Verification summary error: {str(e)}")
+

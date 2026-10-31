@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
 from app.api.v1.manager_auth import get_current_manager
-from app.db.supabase_client import get_supabase_client
+from app.db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/manager/analytics", tags=["Manager Analytics"])
 
@@ -77,7 +77,7 @@ async def get_discount_analytics(
     """
     
     try:
-        supabase = get_supabase_client()
+        supabase = get_supabase()
         
         # Get date range
         month_start = f"{month_year}-01"
@@ -228,7 +228,7 @@ async def get_top_products(
     """
     
     try:
-        supabase = get_supabase_client()
+        supabase = get_supabase()
         
         # Get date range
         month_start = f"{month_year}-01"
@@ -312,7 +312,7 @@ async def get_sales_summary(
     """
     
     try:
-        supabase = get_supabase_client()
+        supabase = get_supabase()
         
         # Calculate date range based on period
         today = datetime.now().date()
@@ -393,3 +393,4 @@ async def get_sales_summary(
 
 
 from datetime import timedelta
+

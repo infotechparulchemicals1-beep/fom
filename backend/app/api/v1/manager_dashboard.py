@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime, timedelta
 from app.api.v1.manager_auth import get_current_manager
-from app.db.supabase_client import get_supabase_client
+from app.db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/manager/dashboard", tags=["Manager Dashboard"])
 
@@ -65,7 +65,7 @@ async def get_dashboard_overview(
     """
     
     try:
-        supabase = get_supabase_client()
+        supabase = get_supabase()
         manager_email = manager["email"]
         
         # Get manager's assigned officers
@@ -235,7 +235,7 @@ async def get_team_summary(
     """
     
     try:
-        supabase = get_supabase_client()
+        supabase = get_supabase()
         
         # Get date range
         month_start = f"{month_year}-01"
@@ -340,3 +340,4 @@ async def get_team_summary(
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Team summary error: {str(e)}")
+

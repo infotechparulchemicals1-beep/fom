@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
 from app.api.v1.manager_auth import get_current_manager
-from app.db.supabase_client import get_supabase_client
+from app.db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/manager/plans", tags=["Manager Plans"])
 
@@ -81,7 +81,7 @@ async def get_plan_vs_actual(
     """
     
     try:
-        supabase = get_supabase_client()
+        supabase = get_supabase()
         
         # Get field officer
         officer_response = supabase.table("users")\
@@ -268,7 +268,7 @@ async def get_daily_plans(
     """
     
     try:
-        supabase = get_supabase_client()
+        supabase = get_supabase()
         
         # Get all plans in date range
         plans_response = supabase.table("daily_route_plans")\
@@ -309,3 +309,4 @@ async def get_daily_plans(
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Daily plans error: {str(e)}")
+
