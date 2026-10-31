@@ -6,7 +6,8 @@ class Settings(BaseSettings):
     supabase_anon_key: str = "placeholder-anon-key"
     supabase_service_role_key: str = "placeholder-service-role-key"
     jwt_secret: str = "placeholder-jwt-secret"
-    allowed_origins: str = "http://localhost:8081,exp://localhost:8081"
+    # Phase 4: Add PC-Sales CORS origin
+    allowed_origins: str = "http://localhost:8081,exp://localhost:8081,https://pc-sales.vercel.app"
 
     @property
     def origins_list(self) -> list[str]:
