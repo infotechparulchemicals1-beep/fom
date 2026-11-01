@@ -10,25 +10,25 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 # Pre-provisioned designated officers (built-in roster)
 DESIGNATED_OFFICERS = {
     "rajesh.sharma@fscdairy.in": {
-        "user_id": "off-01",
+        "user_id": "6e041c5c-5e3a-4350-8ec3-ce93e533fcf4",
         "name": "Rajesh Sharma",
         "role": "Senior Field Officer",
         "password": "aura2026",
     },
     "suresh.patel@fscdairy.in": {
-        "user_id": "off-02",
+        "user_id": "22bfa833-7671-4084-9ac7-663361a6ab4f",
         "name": "Suresh Patel",
         "role": "Field Officer",
         "password": "aura2026",
     },
     "anil.d@fscdairy.in": {
-        "user_id": "off-03",
+        "user_id": "c2e920d1-1bb2-4929-84b2-5e23e93efe04",
         "name": "Anil Deshmukh",
         "role": "Route Specialist",
         "password": "aura2026",
     },
     "vikram.j@fscdairy.in": {
-        "user_id": "off-04",
+        "user_id": "810e0fe3-6dfb-42e9-ab78-e10cbc8ee95c",
         "name": "Vikram Joshi",
         "role": "Field Officer",
         "password": "aura2026",
@@ -40,7 +40,7 @@ DESIGNATED_OFFICERS = {
         "password": "aura2026",
     },
     "admin@aura.io": {
-        "user_id": "admin-01",
+        "user_id": "49e461f9-c7f7-46f0-aa98-1f810c97250d",
         "name": "Fleet Administrator",
         "role": "Administrator",
         "password": "aura2026",
