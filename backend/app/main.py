@@ -4,7 +4,7 @@ from app.config import settings
 from app.api.v1 import (
     sessions, locations, admin, auth, profiles, customers, visits,
     manager_auth, manager_dashboard, manager_plans, manager_analytics,
-    manager_verification, manager_officers
+    manager_verification, manager_officers, manager_stock
 )
 
 app = FastAPI(
@@ -37,6 +37,7 @@ app.include_router(manager_plans.router, prefix="/api/v1")
 app.include_router(manager_analytics.router, prefix="/api/v1")
 app.include_router(manager_verification.router, prefix="/api/v1")
 app.include_router(manager_officers.router, prefix="/api/v1")
+app.include_router(manager_stock.router, prefix="/api/v1")
 
 
 @app.get("/health")
