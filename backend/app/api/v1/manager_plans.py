@@ -2,7 +2,7 @@
 Manager Plans API
 Phase 4: Manager Bridge APIs
 
-Provides plan vs actual comparison and analysis.
+Provides village-based plan vs actual comparison and sequence verification.
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query
@@ -17,21 +17,32 @@ router = APIRouter(prefix="/manager/plans", tags=["Manager Plans"])
 
 class PlanItemDetail(BaseModel):
     sequence: int
-    customer_name: str
+    village_name: str
+    customer_name: Optional[str] = None
     task_type: str = "order"
     planned_time: Optional[str] = None
     status: str = "pending"
     executed_visit_id: Optional[str] = None
     actual_time: Optional[str] = None
     deviation_minutes: Optional[int] = None
+    village_match: bool = False
+    sequence_match: bool = False
 
 
 class ActualVisit(BaseModel):
+    visit_id: Optional[str] = None
     customer_name: str
+    village: Optional[str] = None
     checked_in_at: str
     checked_out_at: Optional[str] = None
     duration_minutes: Optional[int] = None
+    checkin_lat: Optional[float] = None
+    checkin_lng: Optional[float] = None
+    checkout_lat: Optional[float] = None
+    checkout_lng: Optional[float] = None
     planned: bool = True
+    village_in_plan: bool = False
+    sequence_order_correct: bool = False
 
 
 class EditHistoryItem(BaseModel):
@@ -58,7 +69,11 @@ async def get_plan_vs_actual(
     manager: dict = Depends(get_current_manager)
 ):
     """
-    Compare planned route vs actual visits for a specific date
+    Compare planned route (village-based) vs actual visits for a specific date.
+    Evaluates:
+    1. Is customer village matching the route plan village?
+    2. Are customer visits conducted in the correct sequence as planned?
+    3. Provides GPS coordinates and timestamps for check-in & check-out.
     """
     try:
         supabase = get_supabase()
@@ -76,7 +91,6 @@ async def get_plan_vs_actual(
         plan_res = supabase.table("daily_route_plans").select("*").eq("user_email", user_email).eq("plan_date", date).execute()
 
         if not plan_res.data:
-            # Return empty response instead of failing
             return PlanVsActualResponse(
                 date=date,
                 field_officer={"email": user_email, "name": officer.get("name") or user_email},
@@ -87,6 +101,7 @@ async def get_plan_vs_actual(
                     "is_edited": False,
                     "revision_number": 1,
                     "last_edit_reason": None,
+                    "planned_villages": 0,
                     "planned_customers": 0,
                 },
                 plan_items=[],
@@ -98,6 +113,8 @@ async def get_plan_vs_actual(
                     "unplanned_count": 0,
                     "completion_rate": 0.0,
                     "plan_adherence_rate": 100.0,
+                    "village_match_count": 0,
+                    "sequence_adherence_pct": 100.0,
                 },
                 edit_history=[],
             )
@@ -113,65 +130,112 @@ async def get_plan_vs_actual(
         day_end = f"{date}T23:59:59"
         visits = []
         try:
-            visits_res = supabase.table("customer_visits").select("*, customers(*)").gte("checked_in_at", day_start).lte("checked_in_at", day_end).execute()
+            visits_res = supabase.table("customer_visits").select("*, customers(*)").gte("checked_in_at", day_start).lte("checked_in_at", day_end).order("checked_in_at").execute()
             visits = visits_res.data or []
         except Exception:
             pass
 
-        # Build plan items with execution data
+        # Extract planned villages in sequence
+        # (sequence_number, lower_case_village, original_village)
+        planned_villages = []
+        for idx, it in enumerate(raw_items):
+            cust = it.get("customers") or {}
+            v_name = (it.get("village_name") or cust.get("village") or cust.get("name") or "").strip()
+            seq = it.get("planned_sequence") or (idx + 1)
+            planned_villages.append((seq, v_name.lower(), v_name))
+
+        # Build actual visits list with sequence & village verification
+        actual_visits = []
+        visited_villages_in_order = []
+
+        for v_idx, v in enumerate(visits):
+            cust = v.get("customers") or {}
+            c_name = cust.get("name") or v.get("customer_name") or "Tracked Customer"
+            v_village = (v.get("visit_village") or cust.get("village") or "").strip()
+            v_village_lower = v_village.lower()
+            visited_villages_in_order.append(v_village_lower)
+
+            # Verification 1: Is this village in today's route plan?
+            village_in_plan = any(pv[1] == v_village_lower for pv in planned_villages if pv[1])
+
+            # Verification 2: Is this visit in the planned sequence order?
+            # Expected planned village at position v_idx:
+            expected_seq_village = planned_villages[v_idx][1] if v_idx < len(planned_villages) else None
+            sequence_order_correct = (expected_seq_village == v_village_lower) if expected_seq_village else False
+
+            is_planned = village_in_plan or (v.get("customer_id") in [it.get("customer_id") for it in raw_items])
+
+            actual_visits.append(ActualVisit(
+                visit_id=v.get("id"),
+                customer_name=c_name,
+                village=v_village or None,
+                checked_in_at=v.get("checked_in_at", ""),
+                checked_out_at=v.get("checked_out_at"),
+                duration_minutes=v.get("duration_minutes", 0),
+                checkin_lat=v.get("checkin_lat"),
+                checkin_lng=v.get("checkin_lng"),
+                checkout_lat=v.get("checkout_lat"),
+                checkout_lng=v.get("checkout_lng"),
+                planned=is_planned,
+                village_in_plan=village_in_plan,
+                sequence_order_correct=sequence_order_correct,
+            ))
+
+        # Build plan items with execution data and village matching
         plan_items = []
-        planned_customer_ids = []
-        for item in raw_items:
+        for idx, item in enumerate(raw_items):
             cust = item.get("customers") or {}
-            c_name = cust.get("name") or f"Customer #{str(item.get('customer_id', ''))[:8]}"
-            c_id = item.get("customer_id")
-            planned_customer_ids.append(c_id)
+            village_name = (item.get("village_name") or cust.get("village") or cust.get("name") or "Planned Village").strip()
+            village_lower = village_name.lower()
+            c_name = cust.get("name") or village_name
+            seq = item.get("planned_sequence") or (idx + 1)
 
-            matching_visit = next((v for v in visits if v.get("customer_id") == c_id), None)
-            actual_time = matching_visit.get("checked_in_at") if matching_visit else None
+            # Find matching visit by customer or village
+            matching_visit = next(
+                (v for v in actual_visits if (v.village and v.village.lower() == village_lower) or (item.get("customer_id") and v.visit_id == item.get("executed_visit_id"))),
+                None
+            )
 
+            actual_time = matching_visit.checked_in_at if matching_visit else None
             deviation_minutes = None
             if matching_visit and item.get("planned_time"):
                 try:
                     p_dt = datetime.fromisoformat(f"{date}T{item['planned_time']}")
-                    a_dt = datetime.fromisoformat(matching_visit["checked_in_at"].replace("Z", "+00:00"))
+                    a_dt = datetime.fromisoformat(matching_visit.checked_in_at.replace("Z", "+00:00"))
                     deviation_minutes = int((a_dt.timestamp() - p_dt.timestamp()) / 60)
                 except Exception:
                     pass
 
+            village_match = bool(matching_visit)
+            # Sequence match: did the actual visit index match the planned sequence?
+            sequence_match = False
+            if idx < len(visited_villages_in_order):
+                sequence_match = (visited_villages_in_order[idx] == village_lower)
+
             item_status = "completed" if matching_visit else item.get("status", "pending")
 
             plan_items.append(PlanItemDetail(
-                sequence=item.get("planned_sequence", 1),
+                sequence=seq,
+                village_name=village_name,
                 customer_name=c_name,
                 task_type=item.get("task_type", "order"),
                 planned_time=item.get("planned_time", "09:00"),
                 status=item_status,
-                executed_visit_id=matching_visit.get("id") if matching_visit else None,
+                executed_visit_id=matching_visit.visit_id if matching_visit else None,
                 actual_time=actual_time,
                 deviation_minutes=deviation_minutes,
-            ))
-
-        # Build actual visits list
-        actual_visits = []
-        for v in visits:
-            cust = v.get("customers") or {}
-            c_name = cust.get("name") or "Tracked Customer"
-            is_planned = v.get("customer_id") in planned_customer_ids
-
-            actual_visits.append(ActualVisit(
-                customer_name=c_name,
-                checked_in_at=v.get("checked_in_at", ""),
-                checked_out_at=v.get("checked_out_at"),
-                duration_minutes=v.get("duration_minutes", 0),
-                planned=is_planned,
+                village_match=village_match,
+                sequence_match=sequence_match,
             ))
 
         planned_count = len(raw_items)
         completed_count = sum(1 for it in plan_items if it.status == "completed")
         skipped_count = sum(1 for it in plan_items if it.status == "skipped")
         unplanned_count = sum(1 for v in actual_visits if not v.planned)
+        village_match_count = sum(1 for it in plan_items if it.village_match)
 
+        correct_sequence_count = sum(1 for v in actual_visits if v.sequence_order_correct)
+        sequence_adherence_pct = (correct_sequence_count / len(actual_visits) * 100) if len(actual_visits) > 0 else 100.0
         completion_rate = (completed_count / planned_count * 100) if planned_count > 0 else 0
         plan_adherence = ((planned_count - unplanned_count) / planned_count * 100) if planned_count > 0 else 0
 
@@ -182,6 +246,8 @@ async def get_plan_vs_actual(
             "unplanned_count": unplanned_count,
             "completion_rate": round(completion_rate, 1),
             "plan_adherence_rate": round(max(0, plan_adherence), 1),
+            "village_match_count": village_match_count,
+            "sequence_adherence_pct": round(sequence_adherence_pct, 1),
         }
 
         # Edit history fallback
@@ -211,6 +277,7 @@ async def get_plan_vs_actual(
                 "is_edited": bool(plan.get("is_edited", False)),
                 "revision_number": plan.get("revision_number", 1),
                 "last_edit_reason": plan.get("last_edit_reason"),
+                "planned_villages": planned_count,
                 "planned_customers": planned_count,
             },
             plan_items=plan_items,
@@ -265,6 +332,7 @@ async def get_daily_plans(
                 "revision_number": plan.get("revision_number", 1),
                 "submitted_at": plan.get("submission_time") or plan.get("submitted_at"),
                 "customer_count": item_count,
+                "village_count": item_count,
             })
 
         return {
