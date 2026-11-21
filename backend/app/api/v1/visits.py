@@ -330,22 +330,44 @@ async def get_visit_summary(
 @router.get("/admin/timeline")
 async def get_admin_visit_timeline(
     date: Optional[str] = Query(None, description="YYYY-MM-DD in IST; defaults to today"),
+    officer_id: Optional[str] = Query(None, description="Optional officer user_id filter"),
     current_user: dict = Depends(get_current_user),
 ):
-    """Admin: all officers' visits for a given day, grouped by officer."""
+    """Admin: all officers' visits for a given day, grouped by officer, with walking/motorcycle speed breakdown."""
     sb = get_supabase()
     try:
         start_utc, end_utc = _ist_day_bounds(date)
 
-        visits_res = (
+        query = (
             sb.table("customer_visits")
             .select("*, customers(name, village, taluka, district)")
             .gte("checked_in_at", start_utc)
             .lt("checked_in_at", end_utc)
-            .order("checked_in_at", desc=False)
-            .execute()
         )
+        if officer_id:
+            query = query.eq("user_id", officer_id)
+        visits_res = query.order("checked_in_at", desc=False).execute()
         visits = visits_res.data or []
+
+        # Bulk fetch location points for speed breakdown analysis
+        pts_by_user: dict = {}
+        try:
+            loc_query = (
+                sb.table("location_points")
+                .select("user_id, recorded_at, speed_mps")
+                .gte("recorded_at", start_utc)
+                .lt("recorded_at", end_utc)
+                .order("recorded_at", desc=False)
+            )
+            if officer_id:
+                loc_query = loc_query.eq("user_id", officer_id)
+            loc_res = loc_query.execute()
+            for pt in (loc_res.data or []):
+                uid = pt.get("user_id")
+                if uid:
+                    pts_by_user.setdefault(uid, []).append(pt)
+        except Exception as e:
+            print("[Timeline API] Note: location_points query warning:", e)
 
         # Get user display names
         users_map = {}
@@ -360,7 +382,7 @@ async def get_admin_visit_timeline(
         except Exception:
             pass
 
-        # Group by officer
+        # Group by officer and calculate walking vs motorcycle minutes
         grouped: dict = {}
         for v in visits:
             uid = v.get("user_id")
@@ -375,9 +397,43 @@ async def get_admin_visit_timeline(
                     "visits": [],
                 }
             entry = grouped[uid]
+
+            # Calculate walking/zero speed vs motorcycle minutes
+            dur_mins = int(v.get("duration_minutes") or 0)
+            checkin_str = v.get("checked_in_at") or ""
+            checkout_str = v.get("checked_out_at") or ""
+            user_pts = pts_by_user.get(uid, [])
+
+            moto_mins = 0
+            if checkin_str and dur_mins > 0 and len(user_pts) >= 2:
+                # Filter points inside visit time window
+                end_filter = checkout_str if checkout_str else "9999"
+                v_pts = [p for p in user_pts if checkin_str <= (p.get("recorded_at") or "") <= end_filter]
+                if len(v_pts) >= 2:
+                    moto_seconds = 0
+                    for k in range(len(v_pts) - 1):
+                        try:
+                            t1 = datetime.fromisoformat((v_pts[k].get("recorded_at") or "").replace("Z", "+00:00"))
+                            t2 = datetime.fromisoformat((v_pts[k+1].get("recorded_at") or "").replace("Z", "+00:00"))
+                            dt = (t2 - t1).total_seconds()
+                            if 0 < dt <= 300: # Capped at 5 minutes to prevent tracking disconnect inflation
+                                s1 = float(v_pts[k].get("speed_mps") or 0)
+                                s2 = float(v_pts[k+1].get("speed_mps") or 0)
+                                avg_speed = (s1 + s2) / 2.0
+                                # Speed >= 1.4 m/s (~5 km/h) is motorcycle transit
+                                if avg_speed >= 1.4:
+                                    moto_seconds += dt
+                        except Exception:
+                            pass
+                    moto_mins = min(dur_mins, int(round(moto_seconds / 60.0)))
+
+            walking_mins = max(0, dur_mins - moto_mins)
+            v["walking_minutes"] = walking_mins
+            v["motorcycle_minutes"] = moto_mins
+
             if v.get("checked_out_at"):
                 entry["total_meetings"] += 1
-                entry["total_minutes"] += int(v.get("duration_minutes") or 0)
+                entry["total_minutes"] += dur_mins
             entry["visits"].append(v)
 
         return list(grouped.values())

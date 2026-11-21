@@ -22,8 +22,10 @@ import {
   Shield,
   Phone,
   User,
+  Printer,
+  FileText,
 } from 'lucide-react';
-import { exportAdminVisitPDF } from './utils/pdfExport';
+import { exportAdminVisitPDF, exportIndividualTimelinePDF } from './utils/pdfExport';
 import './index.css';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -35,8 +37,16 @@ interface VisitEntry {
   checked_in_at: string;
   checked_out_at?: string | null;
   duration_minutes?: number | null;
+  walking_minutes?: number | null;
+  motorcycle_minutes?: number | null;
   checkin_lat?: number | null;
   checkin_lng?: number | null;
+  checkin_location?: string | null;
+  checkin_village_name?: string | null;
+  checkout_lat?: number | null;
+  checkout_lng?: number | null;
+  checkout_location?: string | null;
+  checkout_village_name?: string | null;
   notes?: string | null;
   sync_status?: string;
   customers?: { name: string; village?: string; taluka?: string; district?: string } | null;
@@ -150,6 +160,36 @@ function todayIST(): string {
   return ist.toISOString().slice(0, 10);
 }
 
+function fmtBizDate(iso?: string | null): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  const day = d.getDate();
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const month = months[d.getMonth()];
+  const yr = String(d.getFullYear()).slice(-2);
+  return `${day} ${month} ${yr}`;
+}
+
+function fmtBizTime(iso?: string | null): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  let hours = d.getHours();
+  const minutes = String(d.getMinutes()).padStart(2, '0');
+  const ampm = hours >= 12 ? 'pm' : 'am';
+  hours = hours % 12;
+  hours = hours ? hours : 12;
+  const strHours = String(hours).padStart(2, '0');
+  return `${strHours}:${minutes} ${ampm}`;
+}
+
+function fmtBizDur(minutes?: number | null): string {
+  if (!minutes || minutes <= 0) return '0m';
+  if (minutes >= 60) {
+    return `${(minutes / 60).toFixed(1)}h`;
+  }
+  return `${minutes}m`;
+}
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 // Token login banner
@@ -186,7 +226,7 @@ function TokenBanner({ token, onSet }: { token: string; onSet: (t: string) => vo
 
 // ─── Tab: Visit Dashboard (replaces old map tab) ─────────────────────────────
 
-function VisitDashboardTab({ token }: { token: string }) {
+function VisitDashboardTab({ token, onOpenIndividualReport }: { token: string; onOpenIndividualReport?: (officerId: string) => void }) {
   const [date, setDate] = useState(todayIST());
   const [timeline, setTimeline] = useState<OfficerTimeline[]>([]);
   const [loading, setLoading] = useState(false);
@@ -297,7 +337,7 @@ function VisitDashboardTab({ token }: { token: string }) {
               <div style={{ marginBottom: 16 }}>
                 <div style={{ fontSize: 20, fontWeight: 800, color: '#111827' }}>{selected.name || selected.email}</div>
                 <div style={{ fontSize: 13, color: '#6B7280', marginTop: 2 }}>{selected.email}</div>
-                <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap', alignItems: 'center' }}>
                   <span style={{ background: '#EFF6FF', color: '#2563EB', borderRadius: 8, padding: '4px 12px', fontSize: 13, fontWeight: 700 }}>
                     {selected.total_meetings} completed visits
                   </span>
@@ -307,6 +347,27 @@ function VisitDashboardTab({ token }: { token: string }) {
                   <span style={{ background: '#FEF3C7', color: '#D97706', borderRadius: 8, padding: '4px 12px', fontSize: 13, fontWeight: 700 }}>
                     {selected.visits.filter(v => !v.checked_out_at).length} in progress
                   </span>
+                  {onOpenIndividualReport && (
+                    <button
+                      onClick={() => onOpenIndividualReport(selected.user_id)}
+                      style={{
+                        marginLeft: 'auto',
+                        background: '#0F172A',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: 8,
+                        padding: '6px 14px',
+                        fontSize: 12,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                      }}
+                    >
+                      <FileText size={13} /> View Timeline Report (PDF)
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -355,6 +416,22 @@ function VisitDashboardTab({ token }: { token: string }) {
                             {isComplete ? 'Completed' : 'In Progress'}
                           </span>
                         </div>
+                        {(v.checkin_location || v.checkout_location) && (
+                          <div style={{ fontSize: 11, color: '#475569', marginTop: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                            {v.checkin_location && <div>📍 <strong>Check-In:</strong> {v.checkin_location}</div>}
+                            {v.checkout_location && <div>🏁 <strong>Check-Out:</strong> {v.checkout_location}</div>}
+                          </div>
+                        )}
+                        {isComplete && (
+                          <div style={{ display: 'flex', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: 11, background: '#EFF6FF', color: '#1D4ED8', padding: '3px 8px', borderRadius: 6, fontWeight: 600 }}>
+                              🚶 Walk/Zero: {v.walking_minutes ?? v.duration_minutes ?? 0}m
+                            </span>
+                            <span style={{ fontSize: 11, background: '#FEF3C7', color: '#B45309', padding: '3px 8px', borderRadius: 6, fontWeight: 600 }}>
+                              🏍️ Motorcycle: {v.motorcycle_minutes ?? 0}m
+                            </span>
+                          </div>
+                        )}
                         {v.notes && (
                           <div style={{ fontSize: 12, color: '#6B7280', marginTop: 6, fontStyle: 'italic' }}>
                             💬 {v.notes}
@@ -497,6 +574,254 @@ function ReportTab({ token }: { token: string }) {
           </tbody>
         </table>
       )}
+    </div>
+  );
+}
+
+// ─── Tab: Individual Timeline Report (Exact Vikas Ghatage.PDF format) ───────────
+
+function IndividualTimelineTab({
+  token,
+  selectedOfficerId,
+  onSelectOfficerId,
+}: {
+  token: string;
+  selectedOfficerId?: string;
+  onSelectOfficerId?: (id: string) => void;
+}) {
+  const [date, setDate] = useState(todayIST());
+  const [timeline, setTimeline] = useState<OfficerTimeline[]>([]);
+  const [activeOfficerId, setActiveOfficerId] = useState<string>(selectedOfficerId || '');
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const data = await apiFetch(`/visits/admin/timeline?date=${date}`, token);
+    if (Array.isArray(data)) {
+      setTimeline(data);
+      if (data.length > 0) {
+        if (!activeOfficerId || !data.some(o => o.user_id === activeOfficerId)) {
+          setActiveOfficerId(data[0].user_id);
+          onSelectOfficerId?.(data[0].user_id);
+        }
+      }
+    }
+    setLoading(false);
+  }, [date, token, activeOfficerId, onSelectOfficerId]);
+
+  useEffect(() => {
+    if (selectedOfficerId && selectedOfficerId !== activeOfficerId) {
+      setActiveOfficerId(selectedOfficerId);
+    }
+  }, [selectedOfficerId, activeOfficerId]);
+
+  useEffect(() => {
+    load();
+  }, [date, token]);
+
+  const currentOfficer = timeline.find(o => o.user_id === activeOfficerId) || timeline[0] || null;
+
+  const totalCompletedVisits = currentOfficer?.visits.filter(v => v.checked_out_at).length || 0;
+  const totalMinutes = currentOfficer?.total_minutes || 0;
+  const totalWalkingMins = currentOfficer?.visits.reduce((acc, v) => acc + (v.walking_minutes ?? (v.duration_minutes ?? 0)), 0) || 0;
+  const totalMotorcycleMins = currentOfficer?.visits.reduce((acc, v) => acc + (v.motorcycle_minutes ?? 0), 0) || 0;
+
+  const dateRangeStr = `${fmtBizDate(date)} - ${fmtBizDate(date)}`;
+
+  const handleExportPDF = () => {
+    if (!currentOfficer) return;
+    exportIndividualTimelinePDF({
+      officerName: currentOfficer.name || currentOfficer.email || 'Field Officer',
+      dateRangeStr,
+      visits: currentOfficer.visits,
+    });
+  };
+
+  const handlePrint = () => {
+    window.print();
+  };
+
+  return (
+    <div style={{ flex: 1, overflowY: 'auto', background: '#F1F5F9', padding: '20px 16px' }}>
+      {/* Top Filter & Action Bar */}
+      <div style={{ maxWidth: 960, margin: '0 auto 16px auto', display: 'flex', gap: 12, alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', background: '#fff', padding: '14px 20px', borderRadius: 10, border: '1px solid #E2E8F0', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 700, color: '#64748B', display: 'block', marginBottom: 2 }}>SELECT OFFICER</label>
+            <select
+              value={activeOfficerId}
+              onChange={e => {
+                setActiveOfficerId(e.target.value);
+                onSelectOfficerId?.(e.target.value);
+              }}
+              style={{ border: '1px solid #CBD5E1', borderRadius: 6, padding: '7px 12px', fontSize: 13, minWidth: 240, background: '#fff', fontWeight: 600, color: '#0F172A' }}
+            >
+              {timeline.length === 0 && <option value="">No officers with visits today</option>}
+              {timeline.map(o => (
+                <option key={o.user_id} value={o.user_id}>
+                  {o.name || o.email} ({o.visits.length} visit{o.visits.length !== 1 ? 's' : ''})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 700, color: '#64748B', display: 'block', marginBottom: 2 }}>SELECT DATE</label>
+            <input
+              type="date"
+              value={date}
+              onChange={e => setDate(e.target.value)}
+              style={{ border: '1px solid #CBD5E1', borderRadius: 6, padding: '6px 10px', fontSize: 13, background: '#fff' }}
+            />
+          </div>
+
+          <button
+            onClick={load}
+            disabled={loading}
+            style={{ marginTop: 14, background: '#2563EB', color: '#fff', border: 'none', borderRadius: 6, padding: '7px 14px', cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}
+          >
+            <RefreshCw size={13} /> {loading ? 'Loading…' : 'Refresh'}
+          </button>
+        </div>
+
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 14 }}>
+          <button
+            onClick={handlePrint}
+            disabled={!currentOfficer || currentOfficer.visits.length === 0}
+            style={{ background: '#fff', color: '#334155', border: '1px solid #CBD5E1', borderRadius: 6, padding: '7px 14px', cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}
+          >
+            <Printer size={14} /> Print
+          </button>
+          <button
+            onClick={handleExportPDF}
+            disabled={!currentOfficer || currentOfficer.visits.length === 0}
+            style={{ background: '#10B981', color: '#fff', border: 'none', borderRadius: 6, padding: '7px 18px', cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, boxShadow: '0 2px 4px rgba(16,185,129,0.2)' }}
+          >
+            <Download size={14} /> Export Timeline PDF
+          </button>
+        </div>
+      </div>
+
+      {/* Speed Metrics Summary Cards */}
+      {currentOfficer && (
+        <div style={{ maxWidth: 960, margin: '0 auto 16px auto', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <div style={{ flex: '1 1 180px', background: '#fff', border: '1px solid #E2E8F0', borderRadius: 8, padding: '12px 16px' }}>
+            <div style={{ fontSize: 11, color: '#64748B', fontWeight: 600 }}>COMPLETED VISITS</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: '#0F172A', marginTop: 2 }}>{totalCompletedVisits}</div>
+            <div style={{ fontSize: 11, color: '#94A3B8', marginTop: 2 }}>{currentOfficer.visits.length} total visits</div>
+          </div>
+          <div style={{ flex: '1 1 180px', background: '#fff', border: '1px solid #E2E8F0', borderRadius: 8, padding: '12px 16px' }}>
+            <div style={{ fontSize: 11, color: '#64748B', fontWeight: 600 }}>TOTAL TIME</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: '#2563EB', marginTop: 2 }}>{fmtBizDur(totalMinutes)}</div>
+            <div style={{ fontSize: 11, color: '#94A3B8', marginTop: 2 }}>{totalMinutes} minutes total</div>
+          </div>
+          <div style={{ flex: '1 1 200px', background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 8, padding: '12px 16px' }}>
+            <div style={{ fontSize: 11, color: '#1D4ED8', fontWeight: 700 }}>🚶 WALKING / ZERO SPEED</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: '#1D4ED8', marginTop: 2 }}>{totalWalkingMins} mins</div>
+            <div style={{ fontSize: 11, color: '#3B82F6', marginTop: 2 }}>Stationary & meeting discussion</div>
+          </div>
+          <div style={{ flex: '1 1 200px', background: '#FEF3C7', border: '1px solid #FDE68A', borderRadius: 8, padding: '12px 16px' }}>
+            <div style={{ fontSize: 11, color: '#B45309', fontWeight: 700 }}>🏍️ MOTORCYCLE TRANSIT</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: '#B45309', marginTop: 2 }}>{totalMotorcycleMins} mins</div>
+            <div style={{ fontSize: 11, color: '#D97706', marginTop: 2 }}>Speed ≥ 1.4 m/s (≥ 5 km/h)</div>
+          </div>
+        </div>
+      )}
+
+      {/* Main Document Card (Exact replicate of Vikas Ghatage.PDF) */}
+      <div style={{ maxWidth: 960, margin: '0 auto', background: '#fff', border: '1px solid #CBD5E1', borderRadius: 6, padding: '36px 40px', boxShadow: '0 4px 16px rgba(0,0,0,0.06)' }}>
+        {/* Centered Header */}
+        <div style={{ textAlign: 'center', marginBottom: 24 }}>
+          <h1 style={{ fontSize: 22, fontWeight: 900, color: '#000', margin: 0, letterSpacing: '0.08em' }}>PARUL CHEMICALS</h1>
+          <h2 style={{ fontSize: 15, fontWeight: 700, color: '#111827', margin: '6px 0 2px 0' }}>
+            {(currentOfficer?.name || currentOfficer?.email || 'Officer')}'s Timeline Report
+          </h2>
+          <div style={{ fontSize: 12, color: '#64748B' }}>{dateRangeStr}</div>
+        </div>
+
+        {/* Table */}
+        {!currentOfficer || currentOfficer.visits.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '60px 20px', color: '#94A3B8' }}>
+            <FileText size={40} color="#CBD5E1" style={{ marginBottom: 12 }} />
+            <div style={{ fontSize: 14 }}>No visits recorded for this officer on {fmtBizDate(date)}.</div>
+          </div>
+        ) : (
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, border: '1px solid #94A3B8' }}>
+            <thead>
+              <tr style={{ background: '#F8FAFC', borderBottom: '2px solid #94A3B8' }}>
+                <th style={{ border: '1px solid #CBD5E1', padding: '10px 8px', textAlign: 'left', fontWeight: 700, width: '12%', color: '#0F172A' }}>Date</th>
+                <th style={{ border: '1px solid #CBD5E1', padding: '10px 8px', textAlign: 'left', fontWeight: 700, width: '18%', color: '#0F172A' }}>Party Name</th>
+                <th style={{ border: '1px solid #CBD5E1', padding: '10px 8px', textAlign: 'left', fontWeight: 700, width: '22%', color: '#0F172A' }}>Check In Details</th>
+                <th style={{ border: '1px solid #CBD5E1', padding: '10px 8px', textAlign: 'left', fontWeight: 700, width: '22%', color: '#0F172A' }}>Check Out Details</th>
+                <th style={{ border: '1px solid #CBD5E1', padding: '10px 8px', textAlign: 'left', fontWeight: 700, width: '14%', color: '#0F172A' }}>Time Spent</th>
+                <th style={{ border: '1px solid #CBD5E1', padding: '10px 8px', textAlign: 'left', fontWeight: 700, width: '12%', color: '#0F172A' }}>Comment</th>
+              </tr>
+            </thead>
+            <tbody>
+              {currentOfficer.visits.map((v) => {
+                const dateLabel = fmtBizDate(v.checked_in_at);
+                const partyLabel = v.customers?.name || `${currentOfficer.name || 'Officer'} ( F O )-\nMaharashtra`;
+                const inLoc = v.checkin_location || [v.customers?.village, v.customers?.taluka, v.customers?.district].filter(Boolean).join(', ') || (v.checkin_lat && v.checkin_lng ? `${v.checkin_lat.toFixed(4)}, ${v.checkin_lng.toFixed(4)}` : '');
+                const outLoc = v.checkout_location || [v.customers?.village, v.customers?.taluka, v.customers?.district].filter(Boolean).join(', ') || (v.checkout_lat && v.checkout_lng ? `${v.checkout_lat.toFixed(4)}, ${v.checkout_lng.toFixed(4)}` : '');
+                const durMins = v.duration_minutes ?? 0;
+                const walkMins = v.walking_minutes ?? durMins;
+                const motoMins = v.motorcycle_minutes ?? 0;
+
+                return (
+                  <tr key={v.id} style={{ borderBottom: '1px solid #E2E8F0', verticalAlign: 'top' }}>
+                    <td style={{ border: '1px solid #CBD5E1', padding: '10px 8px', color: '#1E293B' }}>{dateLabel}</td>
+                    <td style={{ border: '1px solid #CBD5E1', padding: '10px 8px', fontWeight: 600, color: '#0F172A', whiteSpace: 'pre-wrap' }}>
+                      {partyLabel}
+                    </td>
+                    <td style={{ border: '1px solid #CBD5E1', padding: '10px 8px', color: '#334155' }}>
+                      <div style={{ fontWeight: 700, color: '#0F172A' }}>{fmtBizTime(v.checked_in_at)}</div>
+                      {inLoc ? <div style={{ fontSize: 11, color: '#475569', marginTop: 3, lineHeight: 1.35 }}>{inLoc}</div> : null}
+                    </td>
+                    <td style={{ border: '1px solid #CBD5E1', padding: '10px 8px', color: '#334155' }}>
+                      <div style={{ fontWeight: 700, color: '#0F172A' }}>{v.checked_out_at ? fmtBizTime(v.checked_out_at) : 'In Progress'}</div>
+                      {outLoc ? <div style={{ fontSize: 11, color: '#475569', marginTop: 3, lineHeight: 1.35 }}>{outLoc}</div> : null}
+                    </td>
+                    <td style={{ border: '1px solid #CBD5E1', padding: '10px 8px' }}>
+                      <div style={{ fontWeight: 800, fontSize: 13, color: '#0F172A' }}>{fmtBizDur(durMins)}</div>
+                      <div style={{ fontSize: 11, color: '#1D4ED8', marginTop: 4, fontWeight: 600 }}>
+                        🚶 Walk/Zero: {walkMins}m
+                      </div>
+                      <div style={{ fontSize: 11, color: '#B45309', marginTop: 2, fontWeight: 600 }}>
+                        🏍️ Motor: {motoMins}m
+                      </div>
+                    </td>
+                    <td style={{ border: '1px solid #CBD5E1', padding: '10px 8px', color: '#334155', whiteSpace: 'pre-wrap', fontSize: 11 }}>
+                      {v.notes || (v.customers?.name ? `${v.customers.name}\n${v.customers.village || ''}` : '—')}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+
+        {/* Company Footer (Identical to Vikas Ghatage.PDF) */}
+        <div style={{ marginTop: 28, fontSize: 11, color: '#1E293B', lineHeight: 1.45 }}>
+          <div>Regards,</div>
+          <div style={{ fontWeight: 800, fontSize: 12 }}>PARUL CHEMICALS</div>
+          <div>F S CALCIVAL</div>
+          <div>SURVEY NO.63/A PART-1,</div>
+          <div>VILLAGE : PANCHDEVLA</div>
+          <div>TAL.WAGHODIA,</div>
+          <div>DIST: VDODARA-391510</div>
+          <div>Phone no. : 9825917101</div>
+          <div>Pin code : 391510</div>
+          <div>E-Mail : parulchemicals2016@gmail.com</div>
+          <div style={{ marginTop: 12, color: '#64748B' }}>Sent through Biz Analyst App</div>
+          <a href="https://bizanalyst.in" target="_blank" rel="noreferrer" style={{ color: '#2563EB', textDecoration: 'none' }}>
+            https://bizanalyst.in
+          </a>
+        </div>
+
+        <div style={{ textAlign: 'center', fontSize: 10, color: '#94A3B8', marginTop: 32 }}>
+          Created by https://bizanalyst.in
+        </div>
+      </div>
     </div>
   );
 }
@@ -708,18 +1033,20 @@ function TeamManagementTab({ token }: { token: string }) {
 
 // ─── Root App ─────────────────────────────────────────────────────────────────
 
-type Tab = 'dashboard' | 'map' | 'report' | 'team';
+type Tab = 'dashboard' | 'individual' | 'map' | 'report' | 'team';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
   const [selectedDate, setSelectedDate] = useState(todayIST());
   const [adminToken, setAdminToken] = useState('');
+  const [individualOfficerId, setIndividualOfficerId] = useState<string>('');
 
   // Overview stats (from visit dashboard data)
   const [overviewDate] = useState(todayIST());
 
   const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
     { id: 'dashboard', label: 'Visit Dashboard', icon: <Activity size={15} /> },
+    { id: 'individual', label: 'Individual Timeline', icon: <UserCheck size={15} /> },
     { id: 'map', label: 'GPS Map', icon: <MapPin size={15} /> },
     { id: 'report', label: 'Daily Report', icon: <FileSpreadsheet size={15} /> },
     { id: 'team', label: 'Team Management', icon: <Users size={15} /> },
@@ -775,7 +1102,22 @@ export default function App() {
 
       {/* Tab content */}
       <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-        {activeTab === 'dashboard' && <VisitDashboardTab token={adminToken} />}
+        {activeTab === 'dashboard' && (
+          <VisitDashboardTab
+            token={adminToken}
+            onOpenIndividualReport={(id) => {
+              setIndividualOfficerId(id);
+              setActiveTab('individual');
+            }}
+          />
+        )}
+        {activeTab === 'individual' && (
+          <IndividualTimelineTab
+            token={adminToken}
+            selectedOfficerId={individualOfficerId}
+            onSelectOfficerId={setIndividualOfficerId}
+          />
+        )}
         {activeTab === 'map' && <GPSMapTab />}
         {activeTab === 'report' && <ReportTab token={adminToken} />}
         {activeTab === 'team' && <TeamManagementTab token={adminToken} />}
